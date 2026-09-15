@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+.env
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+build/
+dist/
+*.egg-info/
+
+# Local runtime and generated assets.
+models/
+samples/
+*.wav
+*.mp3
+*.log
+*.pid
+
+# Editor and OS noise.
+.idea/
+.vscode/
+*~
+.DS_Store
