@@ -10,10 +10,10 @@ last_activity_desc: Phase 03 complete, transitioned to Phase 4
 state_head: ce3b7b7a3216c93ab6d69beba788ed49fef9c2e9
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
   completed_plans: 6
-  percent: 40
+  percent: 60
 ---
 
 # Project State
@@ -23,7 +23,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-18)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Phase 03 — Text-to-Speech & Model Asset Pipeline
+**Current focus:** Phase 04 — Hyprland Integration & Daemon Lifecycle
 
 ## Current Position
 
@@ -32,7 +32,7 @@ Plan: Not started
 Status: Ready to plan
 Last activity: 2026-09-19 — Phase 03 complete, transitioned to Phase 4
 
-Progress: [████░░░░░░] 40%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
