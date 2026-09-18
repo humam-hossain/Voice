@@ -19,13 +19,13 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 - ✓ Cloud-based text-to-speech fallback via Microsoft Edge TTS — existing
 - ✓ X11 & Wayland selection reading via `xclip` / `wl-clipboard` — existing
 - ✓ Background process coordination via PID files and Unix signals (`SIGUSR1`) — existing
+- ✓ Arch Linux Python environment setup via `uv` with Python 3.12 — Phase 1
+- ✓ Wayland keystroke injection support via `wtype` without root daemon — Phase 2
+- ✓ Kokoro model assets download, verification, and headless playback — Phase 3
 
 ### Active
 
-- [ ] Arch Linux Python environment setup via `uv` with Python 3.12 (ensuring C-extension compatibility for CTranslate2 and ONNX Runtime)
-- [ ] Wayland keystroke injection support via `wtype` for native Hyprland text typing without requiring root `ydotoold` daemon
 - [ ] Hyprland shortcut configuration documentation and setup for `$mainMod+B` (STT toggle) and `$mainMod+T` (TTS selection)
-- [ ] Kokoro model assets download and verification on Arch Linux
 - [ ] End-to-end verification of STT dictation and TTS playback under Hyprland
 
 ### Out of Scope
@@ -52,10 +52,12 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Use `uv` with Python 3.12 | Arch Linux system Python is 3.14, which lacks prebuilt binary wheels for `faster-whisper` / `ctranslate2` / `onnxruntime` | — Pending |
-| Add `wtype` support for Wayland typing | Native Wayland tool already installed on system; does not require root permissions or `ydotoold` daemon | — Pending |
-| Hyprland keybindings via `hyprland.conf` | User runs Hyprland; GNOME `gsettings` does not apply | — Pending |
-| Default to CPU int8 for STT | Intel UHD Graphics 770; CPU int8 provides fast, stable inference without complex driver setup | — Pending |
+| Use `uv` with Python 3.12 | Arch Linux system Python is 3.14, which lacks prebuilt binary wheels for `faster-whisper` / `ctranslate2` / `onnxruntime` | ✓ Validated in Phase 1 |
+| Add `wtype` support for Wayland typing | Native Wayland tool already installed on system; does not require root permissions or `ydotoold` daemon | ✓ Validated in Phase 2 |
+| Kokoro ONNX offline TTS with atomic download and size guards | Prevent corruption from interrupted downloads and strictly enforce offline privacy without cloud fallback | ✓ Validated in Phase 3 |
+| Wayland primary selection read with 1.0s timeout | Prevent hangs if client deadlocks and read non-destructively without clobbering regular clipboard | ✓ Validated in Phase 3 |
+| Hyprland keybindings via `hyprland.conf` | User runs Hyprland; GNOME `gsettings` does not apply | — Pending (Phase 4) |
+| Default to CPU int8 for STT | Intel UHD Graphics 770; CPU int8 provides fast, stable inference without complex driver setup | ✓ Validated in Phase 1 |
 
 ## Evolution
 
@@ -75,4 +77,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-18 after initialization*
+*Last updated: 2026-09-19 after Phase 3*
