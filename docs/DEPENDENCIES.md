@@ -17,6 +17,14 @@ The repository source code is MIT licensed. Third-party packages, model weights,
 | soundfile | WAV output for Kokoro TTS | BSD-style permissive |
 | edge-tts | Optional Edge TTS backend | LGPLv3 package, service terms are separate |
 
+## Wayland Input & Clipboard Stack
+
+| Component | Package (Arch) | Role | Permissions |
+|---|---|---|---|
+| `wtype` | `wtype` | Rootless keystroke injection & simulated shortcuts | Unprivileged (interfaces with `zwp_virtual_keyboard_v1`) |
+| `wl-clipboard` | `wl-clipboard` | Clipboard management (`wl-copy`, `wl-paste`) | Unprivileged |
+| `ydotool` | `ydotool` | Secondary fallback typing backend | Optional (requires root/uinput daemon `ydotoold`) |
+
 ## TTS Backend Caveats
 
 Kokoro is the default local TTS backend in this working tree. The model weights are distributed separately and are not committed to the repository.

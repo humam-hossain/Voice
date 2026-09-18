@@ -184,5 +184,157 @@ class TestPasteClipboardWayland(unittest.TestCase):
         mock_run.assert_called_with(["ydotool", "key", "ctrl+v"], check=True, timeout=15.0)
 
 
+class TestInsertTextDualBehavior(unittest.TestCase):
+    """Test dual clipboard persistence and error notifications in insert_text."""
+
+    def setUp(self):
+        self.args = argparse.Namespace(
+            paste=True,
+            output_method="type",
+            notify=True,
+            type_delay=2,
+            pre_type_delay=0,
+            keep_newlines=False,
+            wayland_backend="auto",
+        )
+
+    @patch("voice.copy_to_clipboard")
+    @patch("voice.type_text", return_value=True)
+    def test_unconditional_clipboard_persistence(self, mock_type, mock_copy):
+        result = voice.insert_text("speech text", self.args)
+        self.assertTrue(result)
+        mock_copy.assert_called_once_with("speech text")
+        mock_type.assert_called_once_with("speech text", self.args)
+
+    @patch("voice.notify")
+    @patch("voice.copy_to_clipboard")
+    @patch("voice.type_text", return_value=False)
+    def test_typing_failure_alerts_user_with_clipboard_preservation(self, mock_type, mock_copy, mock_notify):
+        result = voice.insert_text("speech text", self.args)
+        self.assertFalse(result)
+        mock_copy.assert_called_once_with("speech text")
+        mock_notify.assert_called_once_with(
+            voice.APP_NAME,
+            "Typing failed; transcript preserved in clipboard.",
+            self.args,
+        )
+
+    @patch("voice.paste_clipboard", return_value=True)
+    @patch("voice.copy_to_clipboard", return_value=True)
+    def test_paste_method_leaves_transcript_in_clipboard(self, mock_copy, mock_paste):
+        self.args.output_method = "paste"
+        result = voice.insert_text("speech text", self.args)
+        self.assertTrue(result)
+        mock_copy.assert_called_once_with("speech text")
+        mock_paste.assert_called_once_with("speech text", self.args, "ctrl+v")
+
+    @patch("voice.copy_to_clipboard")
+    @patch("voice.type_text")
+    def test_empty_input_bypasses_clipboard_and_typing(self, mock_type, mock_copy):
+        result = voice.insert_text("   ", self.args)
+        self.assertFalse(result)
+        mock_copy.assert_not_called()
+        mock_type.assert_not_called()
+
+
+class TestWaylandCliParsing(unittest.TestCase):
+    """Test CLI argument parsing and environment variable overrides."""
+
+    def test_default_cli_values(self):
+        with patch.object(voice.sys, "argv", ["voice"]):
+            args = voice.parse_args()
+            self.assertEqual(args.wayland_backend, "auto")
+            self.assertEqual(args.pre_type_delay, 50)
+            self.assertEqual(args.type_delay, 2)
+            self.assertFalse(args.keep_newlines)
+            self.assertEqual(args.output_method, "type")
+
+    def test_cli_flags_override_defaults(self):
+        test_argv = [
+            "voice",
+            "--wayland-backend", "wtype",
+            "--pre-type-delay", "100",
+            "--type-delay", "10",
+            "--keep-newlines",
+        ]
+        with patch.object(voice.sys, "argv", test_argv):
+            args = voice.parse_args()
+            self.assertEqual(args.wayland_backend, "wtype")
+            self.assertEqual(args.pre_type_delay, 100)
+            self.assertEqual(args.type_delay, 10)
+            self.assertTrue(args.keep_newlines)
+
+    def test_environment_variables_override_defaults(self):
+        env = {
+            "VOICE_WAYLAND_BACKEND": "ydotool",
+            "VOICE_PRE_TYPE_DELAY": "80",
+            "VOICE_TYPE_DELAY": "5",
+            "VOICE_KEEP_NEWLINES": "1",
+        }
+        with patch.dict(os.environ, env), patch.object(voice.sys, "argv", ["voice"]):
+            args = voice.parse_args()
+            self.assertEqual(args.wayland_backend, "ydotool")
+            self.assertEqual(args.pre_type_delay, 80)
+            self.assertEqual(args.type_delay, 5)
+            self.assertTrue(args.keep_newlines)
+
+    def test_negative_delays_clamped_to_zero(self):
+        test_argv = ["voice", "--type-delay", "-10", "--pre-type-delay", "-50"]
+        with patch.object(voice.sys, "argv", test_argv):
+            args = voice.parse_args()
+            self.assertEqual(args.type_delay, 0)
+            self.assertEqual(args.pre_type_delay, 0)
+
+
+class TestBackgroundArgvSerialization(unittest.TestCase):
+    """Test propagation of Phase 2 arguments to background worker."""
+
+    def test_background_argv_serialization(self):
+        args = argparse.Namespace(
+            model="small.en",
+            device="cpu",
+            compute_type="int8",
+            beam_size=1,
+            language="en",
+            input_device=None,
+            sample_rate=16000,
+            save_dir=None,
+            allow_download=False,
+            output_method="type",
+            type_delay=5,
+            recording_beep_interval=5.0,
+            beep_volume=0.08,
+            beep_output_device=None,
+            beep=True,
+            paste=True,
+            notify=True,
+            wayland_backend="wtype",
+            pre_type_delay=50,
+            keep_newlines=True,
+        )
+        argv = voice.background_argv(args)
+        self.assertIn("--wayland-backend", argv)
+        self.assertIn("wtype", argv)
+        self.assertIn("--pre-type-delay", argv)
+        self.assertIn("50", argv)
+        self.assertIn("--keep-newlines", argv)
+
+
+class TestNotifyWayland(unittest.TestCase):
+    """Test desktop notification detection in pure Wayland sessions."""
+
+    @patch("shutil.which", return_value="/usr/bin/notify-send")
+    @patch("subprocess.run")
+    def test_notify_pure_wayland(self, mock_run, mock_which):
+        args = argparse.Namespace(notify=True)
+        with patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-1"}, clear=True):
+            voice.notify("Title", "Message", args)
+            mock_run.assert_called_once_with(
+                ["/usr/bin/notify-send", "Title", "Message"],
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

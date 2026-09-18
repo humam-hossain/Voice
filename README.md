@@ -11,14 +11,13 @@ This project is usable on the development workstation, but it is not a polished 
 Tested target:
 
 ```text
-OS: Ubuntu/Linux
-Desktop: GNOME on Wayland or X11
-Python: 3.11
-STT: faster-whisper
+OS: Arch Linux
+Compositor: Hyprland (Wayland)
+Python: 3.12
+STT: faster-whisper (CPU int8)
 TTS default: Kokoro via kokoro-onnx
-Shortcut manager: GNOME gsettings custom keybindings
-Text insertion: ydotool on Wayland, xdotool on X11
-Selection reading: wl-clipboard on Wayland, xclip on X11
+Text insertion: wtype (primary, rootless) with ydotool fallback
+Selection reading / Clipboard: wl-clipboard (wl-copy, wl-paste)
 ```
 
 Known non-goals for the current version:
@@ -169,7 +168,10 @@ VOICE_STT_DEVICE=auto
 VOICE_STT_COMPUTE_TYPE=auto
 VOICE_STT_LANGUAGE=
 VOICE_OUTPUT_METHOD=type
+VOICE_WAYLAND_BACKEND=auto
 VOICE_TYPE_DELAY=2
+VOICE_PRE_TYPE_DELAY=50
+VOICE_KEEP_NEWLINES=false
 VOICE_BEEP=true
 VOICE_RECORDING_BEEP_INTERVAL=5
 VOICE_TTS_BACKEND=kokoro
@@ -179,6 +181,14 @@ VOICE_KOKORO_MODEL=/path/to/kokoro-v1.0.onnx
 VOICE_KOKORO_VOICES=/path/to/voices-v1.0.bin
 VOICE_KOKORO_TRIM=false
 ```
+
+### Key CLI Flags for Wayland Input Injection
+
+- `--wayland-backend`: `auto` (default, prefers `wtype` over `ydotool`), `wtype`, or `ydotool`.
+- `--type-delay`: Milliseconds between synthetic keystrokes for `--output-method type` (default: 2).
+- `--pre-type-delay`: Milliseconds to wait before keystroke injection starts to allow modifier key release (default: 50).
+- `--keep-newlines`: Preserve literal newlines in typed transcripts. Default behavior collapses internal newlines to spaces to prevent accidental Return dispatches.
+
 
 ## Privacy
 

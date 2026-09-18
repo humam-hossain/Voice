@@ -379,7 +379,7 @@ def notify(title: str, message: str, args: argparse.Namespace) -> None:
     if not getattr(args, "notify", True):
         return
     notify_send = shutil.which("notify-send")
-    if not notify_send or not os.getenv("DISPLAY"):
+    if not notify_send or (not os.getenv("DISPLAY") and not os.getenv("WAYLAND_DISPLAY")):
         return
     subprocess.run([notify_send, title, message], check=False, stdin=subprocess.DEVNULL)
 
@@ -599,20 +599,27 @@ def paste_clipboard(text: str, args: argparse.Namespace, shortcut: str = "ctrl+v
 
 
 def insert_text(text: str, args: argparse.Namespace) -> bool:
-    if not text:
+    if not text or not text.strip():
         return False
+
+    # Dual behavior (D-16): Unconditionally buffer transcript in clipboard first
+    copy_to_clipboard(text)
+
     if not args.paste:
         return False
 
     try:
         if args.output_method == "type":
-            return type_text(text, args)
+            success = type_text(text, args)
+            if not success:
+                notify(APP_NAME, "Typing failed; transcript preserved in clipboard.", args)
+            return success
         if args.output_method == "paste":
             return paste_clipboard(text, args, "ctrl+v")
         if args.output_method == "terminal-paste":
             return paste_clipboard(text, args, "ctrl+shift+v")
         if args.output_method == "clipboard":
-            return copy_to_clipboard(text)
+            return True
         raise ValueError(f"unknown output method: {args.output_method}")
     except Exception as exc:
         notify(APP_NAME, f"Could not insert transcript: {exc}", args)
@@ -967,6 +974,12 @@ def background_argv(args: argparse.Namespace) -> list[str]:
         argv.append("--no-paste")
     if not args.notify:
         argv.append("--no-notify")
+    argv += ["--wayland-backend", args.wayland_backend]
+    argv += ["--pre-type-delay", str(args.pre_type_delay)]
+    if getattr(args, "keep_newlines", False):
+        argv.append("--keep-newlines")
+    else:
+        argv.append("--no-keep-newlines")
     return argv
 
 
@@ -1335,6 +1348,31 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("VOICE_TYPE_DELAY", "2")),
         help="Milliseconds between synthetic keystrokes for --output-method type.",
     )
+    parser.add_argument(
+        "--wayland-backend",
+        choices=("auto", "wtype", "ydotool"),
+        default=os.getenv("VOICE_WAYLAND_BACKEND", "auto"),
+        help="Wayland typing backend: auto, wtype, or ydotool. Default: auto.",
+    )
+    parser.add_argument(
+        "--pre-type-delay",
+        type=int,
+        default=int(os.getenv("VOICE_PRE_TYPE_DELAY", "50")),
+        help="Milliseconds to wait before keystroke injection starts. Default: 50.",
+    )
+    parser.add_argument(
+        "--keep-newlines",
+        dest="keep_newlines",
+        action="store_true",
+        default=env_bool("VOICE_KEEP_NEWLINES", False),
+        help="Preserve literal newlines in typed transcripts.",
+    )
+    parser.add_argument(
+        "--no-keep-newlines",
+        dest="keep_newlines",
+        action="store_false",
+        help="Replace internal newlines with spaces before typing. Default.",
+    )
     parser.add_argument("--paste", dest="paste", action="store_true", default=True, help="Insert transcript into the focused app.")
     parser.add_argument("--no-paste", dest="paste", action="store_false", help="Do not insert after background transcription.")
     parser.add_argument("--notify", dest="notify", action="store_true", default=True, help="Show desktop notifications.")
@@ -1356,6 +1394,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beep-output-device", default=os.getenv("VOICE_BEEP_OUTPUT_DEVICE"), help="Output device for cues.")
     parser.add_argument("--test-beep", action="store_true", help="Play start, reminder, and stop cues, then exit.")
     args = parser.parse_args()
+    args.type_delay = max(0, args.type_delay)
+    args.pre_type_delay = max(0, args.pre_type_delay)
     if not args.tts_voice:
         args.tts_voice = DEFAULT_KOKORO_VOICE if args.tts_backend == "kokoro" else tts_defaults.voice
     return args
