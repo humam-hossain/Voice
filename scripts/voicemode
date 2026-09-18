@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# voicemode launcher - Arch Linux / Hyprland
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_PYTHON="${REPO_DIR}/.venv/bin/python"
+VOICE_SCRIPT="${REPO_DIR}/voice.py"
+
+# Enforce PipeWire and PulseAudio client node labeling (D-11)
+export PIPEWIRE_PROPS='{ application.name = voicemode }'
+
+if [ ! -x "${VENV_PYTHON}" ]; then
+    echo "Error: voicemode virtualenv not found at ${VENV_PYTHON}" >&2
+    echo "Run Phase 1 setup to initialize the Python 3.12 virtualenv." >&2
+    exit 1
+fi
+
+exec env "PULSE_PROP_application.name=voicemode" "${VENV_PYTHON}" "${VOICE_SCRIPT}" "$@"
