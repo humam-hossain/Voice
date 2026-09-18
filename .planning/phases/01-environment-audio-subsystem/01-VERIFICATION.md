@@ -3,14 +3,6 @@ phase: 01-environment-audio-subsystem
 verified: 2026-09-18T17:40:30Z
 status: passed
 score: 3/3 must-haves verified
-covered_files:
-  - .planning/phases/01-environment-audio-subsystem/01-01-PLAN.md
-  - .planning/phases/01-environment-audio-subsystem/01-01-SUMMARY.md
-  - .planning/phases/01-environment-audio-subsystem/01-02-PLAN.md
-  - .planning/phases/01-environment-audio-subsystem/01-02-SUMMARY.md
-  - pyproject.toml
-  - voice.py
-  - scripts/voicemode
 behavior_unverified: 0
 ---
 
