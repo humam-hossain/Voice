@@ -1291,8 +1291,6 @@ def main() -> int:
     if args.toggle:
         return toggle_background_recording(args)
 
-    input_device = parse_device(args.input_device)
-    sample_rate = resolve_sample_rate(input_device, args.sample_rate)
     args.language = args.language.strip() or None
 
     if args.record_background:
