@@ -61,8 +61,12 @@ Plans:
 **Plans**: TBD
 
 Plans:
+**Wave 1**
 
 - [ ] 02-01: Implement `wtype` backend in `voice.py:type_text`
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 02-02: Test transcript typing into active focused windows
 
 ### Phase 3: Text-to-Speech & Model Asset Pipeline
