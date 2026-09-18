@@ -1,4 +1,4 @@
-#!/usr/bin/python3.11
+#!/usr/bin/env python3
 """Desktop-global voice command for STT and TTS.
 
 Press Super+B to start recording, press Super+B again to stop and transcribe.
@@ -8,10 +8,15 @@ Ctrl+C exits.
 
 from __future__ import annotations
 
+import os
+
+# Pre-seed PipeWire and PulseAudio node properties before PortAudio/sounddevice initializes (D-11)
+os.environ.setdefault("PULSE_PROP_application.name", "voicemode")
+os.environ.setdefault("PIPEWIRE_PROPS", '{ application.name = voicemode }')
+
 import argparse
 import ast
 import asyncio
-import os
 import re
 import select
 import shutil
@@ -20,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import tty
 import wave
@@ -90,14 +96,34 @@ class TerminalKeys:
         return sys.stdin.read(1)
 
 
+def resample_pcm(audio: np.ndarray, orig_sr: int, target_sr: int = 16000) -> np.ndarray:
+    """Resample 1D or 2D audio array from orig_sr to target_sr using linear interpolation."""
+    if orig_sr == target_sr:
+        return audio
+    num_samples = int(round(len(audio) * float(target_sr) / orig_sr))
+    orig_idx = np.arange(len(audio))
+    target_idx = np.linspace(0, len(audio) - 1, num_samples)
+    if audio.ndim > 1:
+        resampled = np.empty((num_samples, audio.shape[1]), dtype=audio.dtype)
+        for ch in range(audio.shape[1]):
+            resampled[:, ch] = np.interp(target_idx, orig_idx, audio[:, ch])
+        return resampled
+    return np.interp(target_idx, orig_idx, audio).astype(audio.dtype)
+
+
 class Recorder:
-    def __init__(self, sample_rate: int, input_device: Optional[int | str]) -> None:
-        self.sample_rate = sample_rate
+    def __init__(self, sample_rate: int = 16000, input_device: Optional[int | str] = None) -> None:
+        self.target_sample_rate = sample_rate
+        self.actual_sample_rate = sample_rate
         self.input_device = input_device
         self.frames: list[np.ndarray] = []
         self.statuses: list[str] = []
         self.stream: Optional[sd.InputStream] = None
         self.started_at: Optional[float] = None
+
+    @property
+    def sample_rate(self) -> int:
+        return self.target_sample_rate
 
     @property
     def recording(self) -> bool:
@@ -111,13 +137,33 @@ class Recorder:
     def start(self) -> None:
         self.frames = []
         self.statuses = []
-        self.stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            device=self.input_device,
-            callback=self._callback,
-        )
+        try:
+            self.stream = sd.InputStream(
+                samplerate=self.target_sample_rate,
+                channels=1,
+                dtype="float32",
+                device=self.input_device,
+                callback=self._callback,
+            )
+            self.actual_sample_rate = self.target_sample_rate
+        except sd.PortAudioError:
+            try:
+                info = (
+                    sd.query_devices(self.input_device, "input")
+                    if self.input_device is not None
+                    else sd.query_devices(kind="input")
+                )
+                self.actual_sample_rate = int(info["default_samplerate"])
+            except Exception:
+                self.actual_sample_rate = 44100
+
+            self.stream = sd.InputStream(
+                samplerate=self.actual_sample_rate,
+                channels=1,
+                dtype="float32",
+                device=self.input_device,
+                callback=self._callback,
+            )
         self.stream.start()
         self.started_at = time.monotonic()
 
@@ -138,6 +184,11 @@ class Recorder:
 
         audio = np.concatenate(self.frames, axis=0)
         audio = np.clip(audio, -1.0, 1.0)
+
+        # Resample to target 16 kHz if recorded at hardware fallback rate
+        if self.actual_sample_rate != self.target_sample_rate:
+            audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
+
         pcm = (audio * 32767.0).astype(np.int16)
 
         if save_dir:
@@ -153,7 +204,7 @@ class Recorder:
         with wave.open(str(wav_path), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
-            wav.setframerate(self.sample_rate)
+            wav.setframerate(self.target_sample_rate)
             wav.writeframes(pcm.tobytes())
 
         return wav_path, duration, should_delete
@@ -166,13 +217,10 @@ def parse_device(value: Optional[str]) -> Optional[int | str]:
 
 
 def resolve_sample_rate(input_device: Optional[int | str], override: Optional[int]) -> int:
+    """Resolve audio input sample rate, defaulting to 16000 Hz for Faster-Whisper."""
     if override:
         return override
-    try:
-        info = sd.query_devices(input_device, "input") if input_device is not None else sd.query_devices(kind="input")
-        return int(info["default_samplerate"])
-    except Exception:
-        return 16000
+    return 16000
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -261,7 +309,7 @@ def play_cue(args: argparse.Namespace, cue: str) -> None:
         return
 
     patterns = {
-        "start": ((880, 0.07), (0, 0.03), (1175, 0.09)),
+        "start": ((880, 0.07),),
         "recording": ((1046, 0.055),),
         "stop": ((1175, 0.07), (0, 0.03), (660, 0.11)),
         "error": ((220, 0.12), (0, 0.04), (220, 0.12)),
@@ -271,6 +319,13 @@ def play_cue(args: argparse.Namespace, cue: str) -> None:
             time.sleep(duration)
         else:
             play_tone(args, frequency, duration)
+
+
+def play_cue_async(args: argparse.Namespace, cue: str) -> None:
+    """Dispatch auditory cue asynchronously in a background daemon thread."""
+    if not getattr(args, "beep", True):
+        return
+    threading.Thread(target=play_cue, args=(args, cue), daemon=True).start()
 
 
 def actual_backend(model: WhisperModel) -> str:
@@ -883,7 +938,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             time.sleep(0.05)
 
         wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
-        play_cue(args, "stop")
+        play_cue_async(args, "stop")
         notify(APP_NAME, "Transcribing...", args)
         print(f"Stopped ({duration:.1f}s). Transcribing {wav_path}...", flush=True)
 
@@ -1063,7 +1118,7 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
 
                 wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
                 next_recording_cue = None
-                play_cue(args, "stop")
+                play_cue_async(args, "stop")
                 print(f"Stopped ({duration:.1f}s). Transcribing...", flush=True)
                 try:
                     text, model_state = transcribe(model_state, wav_path, args)
@@ -1193,7 +1248,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--beep-volume",
         type=float,
-        default=float(os.getenv("VOICE_BEEP_VOLUME", "0.08")),
+        default=float(os.getenv("VOICEMODE_CUE_VOLUME", os.getenv("VOICE_BEEP_VOLUME", "0.08"))),
         help="Cue volume from 0.0 to 1.0.",
     )
     parser.add_argument("--beep-output-device", default=os.getenv("VOICE_BEEP_OUTPUT_DEVICE"), help="Output device for cues.")
