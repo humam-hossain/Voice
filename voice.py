@@ -28,6 +28,7 @@ import termios
 import threading
 import time
 import tty
+import urllib.request
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,12 +57,27 @@ GNOME_TTS_BINDING_SCHEMA = (
     f"{GNOME_TTS_BINDING_PATH}"
 )
 DEFAULT_TTS_VOICE = "en-GB-RyanNeural"
-DEFAULT_TTS_SPEED = 2.0
+DEFAULT_TTS_SPEED = 1.2
 DEFAULT_TTS_BACKEND = "kokoro"
 DEFAULT_KOKORO_VOICE = "af_heart"
 SECONDARY_KOKORO_VOICE = "bm_george"
 DEFAULT_KOKORO_LANG = "en-us"
 MAX_RECORDING_SECONDS = 300.0
+
+KOKORO_ASSETS = [
+    {
+        "filename": "kokoro-v1.0.onnx",
+        "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
+        "min_size": 300_000_000,
+        "label": "Kokoro v1.0 ONNX model",
+    },
+    {
+        "filename": "voices-v1.0.bin",
+        "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+        "min_size": 20_000_000,
+        "label": "Kokoro v1.0 voices",
+    },
+]
 
 
 @dataclass
@@ -266,6 +282,89 @@ def default_kokoro_model_path() -> Path:
 
 def default_kokoro_voices_path() -> Path:
     return voice_root() / "models" / "kokoro" / "voices-v1.0.bin"
+
+
+def clamp_tts_speed(speed: float) -> float:
+    try:
+        val = float(speed)
+    except (TypeError, ValueError):
+        val = 1.2
+    return max(0.5, min(2.0, val))
+
+
+def download_file_with_progress(url: str, dest_path: Path, min_size: int, label: str) -> None:
+    dest_path = Path(dest_path)
+    if dest_path.is_file() and dest_path.stat().st_size >= min_size:
+        print(f"{label} already present and verified ({dest_path.stat().st_size:,} bytes).")
+        return
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = dest_path.with_suffix(".tmp")
+    if temp_path.exists():
+        temp_path.unlink()
+
+    req = urllib.request.Request(url, headers={"User-Agent": "voicemode/0.1.0"})
+    print(f"Downloading {label}...")
+    start_time = time.time()
+    downloaded = 0
+    try:
+        with urllib.request.urlopen(req) as resp, open(temp_path, "wb") as f:
+            total_size_hdr = resp.headers.get("Content-Length")
+            total_size = int(total_size_hdr) if total_size_hdr and total_size_hdr.isdigit() else None
+            chunk_size = 128 * 1024  # 128 KiB
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                elapsed = time.time() - start_time
+                speed_mb = (downloaded / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                if total_size:
+                    percent = (downloaded / total_size) * 100
+                    print(
+                        f"\r  {downloaded / (1024 * 1024):.1f}/{total_size / (1024 * 1024):.1f} MB ({percent:.1f}%) at {speed_mb:.1f} MB/s",
+                        end="",
+                        flush=True,
+                    )
+                else:
+                    print(f"\r  {downloaded / (1024 * 1024):.1f} MB at {speed_mb:.1f} MB/s", end="", flush=True)
+        print()
+        actual_size = temp_path.stat().st_size
+        if actual_size < min_size:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise RuntimeError(
+                f"Downloaded {label} is undersized ({actual_size:,} bytes < minimum {min_size:,} bytes)."
+            )
+        temp_path.replace(dest_path)
+        print(f"Verified and saved {label} -> {dest_path} ({actual_size:,} bytes)")
+    except Exception:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def download_tts_assets(args: argparse.Namespace) -> int:
+    model_dir = voice_root() / "models" / "kokoro"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        for asset in KOKORO_ASSETS:
+            dest_path = model_dir / asset["filename"]
+            download_file_with_progress(
+                url=asset["url"],
+                dest_path=dest_path,
+                min_size=asset["min_size"],
+                label=asset["label"],
+            )
+        print("All Kokoro TTS assets downloaded and verified successfully.")
+        return 0
+    except Exception as exc:
+        print(f"Error downloading Kokoro TTS assets: {exc}", file=sys.stderr)
+        return 1
 
 
 def normalize_tts_text(text: str) -> str:
@@ -688,17 +787,25 @@ def synthesize_kokoro_tts(text: str, output_path: Path, args: argparse.Namespace
 
     model_path = Path(args.kokoro_model).expanduser()
     voices_path = Path(args.kokoro_voices).expanduser()
-    if not model_path.exists():
-        raise RuntimeError(f"Kokoro model not found: {model_path}")
-    if not voices_path.exists():
-        raise RuntimeError(f"Kokoro voices file not found: {voices_path}")
+    model_ok = model_path.is_file() and model_path.stat().st_size >= 300_000_000
+    voices_ok = voices_path.is_file() and voices_path.stat().st_size >= 20_000_000
+    if not model_ok or not voices_ok:
+        print(
+            "Kokoro TTS assets missing. Download them with: python voice.py --download-tts-assets",
+            file=sys.stderr,
+            flush=True,
+        )
+        notify("Voice TTS Error", "Kokoro assets missing. Run --download-tts-assets.", args)
+        play_cue(args, "error")
+        raise RuntimeError("Kokoro TTS assets missing. Download them with: python voice.py --download-tts-assets")
 
     kokoro = Kokoro(str(model_path), str(voices_path))
     text = normalize_tts_text(text)
+    clamped_speed = clamp_tts_speed(args.tts_speed)
     audio, sample_rate = kokoro.create(
         text,
         voice=args.tts_voice,
-        speed=args.tts_speed,
+        speed=clamped_speed,
         lang=args.kokoro_lang,
         trim=args.kokoro_trim,
     )
@@ -929,22 +1036,37 @@ def print_tts_check(args: argparse.Namespace) -> int:
     print(f"speed: {args.tts_speed:g}x")
     if args.tts_backend == "edge":
         print(f"edge rate: {edge_rate_from_speed(args.tts_speed) or '+0%'}")
+    exit_code = 0
     if args.tts_backend == "kokoro":
-        print(f"kokoro model: {Path(args.kokoro_model).expanduser()}")
-        print(f"kokoro voices: {Path(args.kokoro_voices).expanduser()}")
+        model_path = Path(args.kokoro_model).expanduser()
+        voices_path = Path(args.kokoro_voices).expanduser()
+        print(f"kokoro model: {model_path}")
+        print(f"kokoro voices: {voices_path}")
         print(f"kokoro lang: {args.kokoro_lang}")
         print(f"kokoro trim: {args.kokoro_trim}")
-        try:
-            print(f"kokoro voice count: {len(kokoro_voice_names(args))}")
-        except Exception as exc:
-            print(f"kokoro voice count: unavailable ({exc})")
+
+        model_ok = model_path.is_file() and model_path.stat().st_size >= 300_000_000
+        voices_ok = voices_path.is_file() and voices_path.stat().st_size >= 20_000_000
+        if not model_ok or not voices_ok:
+            print("kokoro status: missing or incomplete (run 'python voice.py --download-tts-assets')")
+            exit_code = 1
+        else:
+            try:
+                from kokoro_onnx import Kokoro
+
+                kokoro = Kokoro(str(model_path), str(voices_path))
+                voice_names = kokoro.get_voices()
+                print(f"kokoro status: verified ({len(voice_names)} voices loaded)")
+            except Exception as exc:
+                print(f"kokoro status: error loading model ({exc})")
+                exit_code = 1
         print(f"secondary voice: {SECONDARY_KOKORO_VOICE}")
     print(f"edge-tts: {version('edge-tts')}")
     print(f"kokoro-onnx: {version('kokoro-onnx')}")
     print(f"soundfile: {version('soundfile')}")
     print(f"ffplay: {shutil.which('ffplay') or 'missing'}")
     print(f"xclip: {shutil.which('xclip') or 'missing'}")
-    return 0
+    return exit_code
 
 
 def background_argv(args: argparse.Namespace) -> list[str]:
@@ -1303,10 +1425,15 @@ def parse_args() -> argparse.Namespace:
         help=f"TTS voice ID. Kokoro default: {DEFAULT_KOKORO_VOICE}; secondary: {SECONDARY_KOKORO_VOICE}.",
     )
     parser.add_argument(
+        "--download-tts-assets",
+        action="store_true",
+        help="Download and verify Kokoro ONNX model and voice weights into models/kokoro/.",
+    )
+    parser.add_argument(
         "--tts-speed",
         type=float,
         default=float(os.getenv("VOICE_TTS_SPEED", str(tts_defaults.speed))),
-        help="TTS speed multiplier. Default: 2.0.",
+        help="TTS speed multiplier. Default: 1.2.",
     )
     parser.add_argument("--tts-background", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--tts-text-file", type=Path, default=None, help=argparse.SUPPRESS)
@@ -1404,6 +1531,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
+    if args.download_tts_assets:
+        return download_tts_assets(args)
     if args.list_tts_voices:
         return print_tts_voices(args)
     if args.tts_check:
