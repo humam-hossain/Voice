@@ -9,8 +9,8 @@ Requirements for initial release on Arch Linux + Hyprland. Each maps to roadmap 
 
 ### Environment & Audio Subsystem
 
-- [ ] **ENV-01**: Setup Python 3.12 virtual environment via `uv` with all STT (`faster-whisper`, `sounddevice`, `numpy`) and TTS (`kokoro-onnx`, `soundfile`, `edge-tts`) dependencies.
-- [ ] **ENV-02**: Verify PortAudio microphone capture and audio cue playback over PipeWire without latency or sample rate mismatch issues.
+- [x] **ENV-01**: Setup Python 3.12 virtual environment via `uv` with all STT (`faster-whisper`, `sounddevice`, `numpy`) and TTS (`kokoro-onnx`, `soundfile`, `edge-tts`) dependencies.
+- [x] **ENV-02**: Verify PortAudio microphone capture and audio cue playback over PipeWire without latency or sample rate mismatch issues.
 
 ### Wayland Typing & Input Injection
 
@@ -59,8 +59,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENV-01 | Phase 1 | Pending |
-| ENV-02 | Phase 1 | Pending |
+| ENV-01 | Phase 1 | Complete |
+| ENV-02 | Phase 1 | Complete |
 | INPUT-01 | Phase 2 | Pending |
 | INPUT-02 | Phase 2 | Pending |
 | TTS-01 | Phase 3 | Pending |
@@ -71,6 +71,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VERIF-02 | Phase 5 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 10 total
 - Mapped to phases: 10
 - Unmapped: 0 ✓

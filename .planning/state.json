@@ -1,0 +1,38 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "Environment & Audio Subsystem",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Wayland Keystroke Injection",
+      "status": "pending"
+    },
+    {
+      "number": "3",
+      "name": "Text-to-Speech & Model Asset Pipeline",
+      "status": "pending"
+    },
+    {
+      "number": "4",
+      "name": "Hyprland Integration & Daemon Lifecycle",
+      "status": "pending"
+    },
+    {
+      "number": "5",
+      "name": "End-to-End System Verification",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step (plan phase 2)",
+    "reason": "Phase 2 of 5 — needs a plan"
+  },
+  "updated_at": "2026-09-18T17:42:02.023Z"
+}
