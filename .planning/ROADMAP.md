@@ -12,7 +12,7 @@ Set up and optimize `voicemode` on Arch Linux under Hyprland (Wayland), deliveri
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Environment & Audio Subsystem** - Setup Python 3.12 via `uv` and verify PortAudio/PipeWire audio capture (completed 2026-09-18)
-- [ ] **Phase 2: Wayland Keystroke Injection** - Implement native `wtype` typing backend in `voice.py`
+- [x] **Phase 2: Wayland Keystroke Injection** - Implement native `wtype` typing backend in `voice.py` (completed 2026-09-19)
 - [ ] **Phase 3: Text-to-Speech & Model Asset Pipeline** - Download Kokoro ONNX assets and verify Wayland selection TTS
 - [ ] **Phase 4: Hyprland Integration & Daemon Lifecycle** - Configure Hyprland shortcuts and verify background daemon toggle
 - [ ] **Phase 5: End-to-End System Verification** - Perform end-to-end validation across multiple application windows
@@ -63,11 +63,11 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 02-01: Implement `wtype` backend in `voice.py:type_text`
+- [x] 02-01: Implement `wtype` backend in `voice.py:type_text`
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-02: Test transcript typing into active focused windows
+- [x] 02-02: Test transcript typing into active focused windows
 
 ### Phase 3: Text-to-Speech & Model Asset Pipeline
 
@@ -134,7 +134,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Environment & Audio Subsystem | 2/2 | Complete    | 2026-09-18 |
-| 2. Wayland Keystroke Injection | 0/2 | Not started | - |
+| 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
 | 3. Text-to-Speech & Model Asset Pipeline | 0/2 | Not started | - |
 | 4. Hyprland Integration & Daemon Lifecycle | 0/2 | Not started | - |
 | 5. End-to-End System Verification | 0/2 | Not started | - |

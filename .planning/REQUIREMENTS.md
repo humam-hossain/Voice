@@ -14,8 +14,8 @@ Requirements for initial release on Arch Linux + Hyprland. Each maps to roadmap 
 
 ### Wayland Typing & Input Injection
 
-- [ ] **INPUT-01**: Implement `wtype` as a primary Wayland typing backend in `voice.py` alongside `ydotool` and `xdotool`.
-- [ ] **INPUT-02**: Configure reliable key-delay and special character handling for `wtype` when injecting transcribed text into focused windows.
+- [x] **INPUT-01**: Implement `wtype` as a primary Wayland typing backend in `voice.py` alongside `ydotool` and `xdotool`.
+- [x] **INPUT-02**: Configure reliable key-delay and special character handling for `wtype` when injecting transcribed text into focused windows.
 
 ### Text-to-Speech & Model Assets
 
@@ -61,8 +61,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | ENV-01 | Phase 1 | Complete |
 | ENV-02 | Phase 1 | Complete |
-| INPUT-01 | Phase 2 | Pending |
-| INPUT-02 | Phase 2 | Pending |
+| INPUT-01 | Phase 2 | Complete |
+| INPUT-02 | Phase 2 | Complete |
 | TTS-01 | Phase 3 | Pending |
 | TTS-02 | Phase 3 | Pending |
 | HYPR-01 | Phase 4 | Pending |
