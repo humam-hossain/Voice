@@ -448,52 +448,154 @@ def copy_to_clipboard(text: str) -> bool:
     return True
 
 
-def type_text(text: str, args: argparse.Namespace) -> bool:
-    if display_server() == "wayland":
-        ydotool = shutil.which("ydotool")
-        if not ydotool:
-            return False
-        subprocess.run(
-            [ydotool, "type", "--key-delay", str(args.type_delay), "--", text],
-            check=True,
-        )
-        return True
+def normalize_typed_text(text: str, keep_newlines: bool = False) -> str:
+    """Trim transcript and collapse internal newlines to spaces unless keep_newlines is True."""
+    if not text:
+        return ""
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned
+    if not keep_newlines:
+        cleaned = re.sub(r"[\r\n]+", " ", cleaned)
+    return cleaned
 
+
+def resolve_wayland_backend(args: argparse.Namespace) -> Optional[str]:
+    """Resolve Wayland typing backend: 'wtype', 'ydotool', or None."""
+    pref = getattr(args, "wayland_backend", "auto")
+    if pref == "wtype":
+        return "wtype" if shutil.which("wtype") else None
+    if pref == "ydotool":
+        return "ydotool" if shutil.which("ydotool") else None
+    # auto: prefer wtype, fallback to ydotool
+    if shutil.which("wtype"):
+        return "wtype"
+    if shutil.which("ydotool"):
+        return "ydotool"
+    return None
+
+
+def type_text(text: str, args: argparse.Namespace) -> bool:
+    text = normalize_typed_text(text, keep_newlines=getattr(args, "keep_newlines", False))
+    if not text:
+        return False
+
+    pre_delay = max(0, getattr(args, "pre_type_delay", 50))
+    if pre_delay > 0:
+        time.sleep(pre_delay / 1000.0)
+
+    server = display_server()
+    if server == "wayland":
+        backend = resolve_wayland_backend(args)
+        if backend == "wtype":
+            type_delay = max(0, getattr(args, "type_delay", 2))
+            cmd = ["wtype"]
+            # Upstream wtype aborts with "Invalid sleep time" if -d <= 0.
+            # Omitting -d defaults delay_ms to 0.
+            if type_delay > 0:
+                cmd.extend(["-d", str(type_delay)])
+            cmd.append("-")
+            try:
+                subprocess.run(cmd, input=text, text=True, check=True, timeout=15.0)
+                return True
+            except Exception:
+                # If 'auto' was requested, attempt fallback to ydotool before giving up
+                if getattr(args, "wayland_backend", "auto") == "auto" and shutil.which("ydotool"):
+                    try:
+                        subprocess.run(
+                            ["ydotool", "type", "--key-delay", str(type_delay), "--", text],
+                            check=True,
+                            timeout=15.0,
+                        )
+                        return True
+                    except Exception:
+                        pass
+                return False
+
+        if backend == "ydotool":
+            type_delay = max(0, getattr(args, "type_delay", 2))
+            try:
+                subprocess.run(
+                    ["ydotool", "type", "--key-delay", str(type_delay), "--", text],
+                    check=True,
+                    timeout=15.0,
+                )
+                return True
+            except Exception:
+                return False
+
+        return False
+
+    # X11 fallback
     xdotool = shutil.which("xdotool")
     if not os.getenv("DISPLAY") or not xdotool:
         return False
-    subprocess.run(
-        [
-            xdotool,
-            "type",
-            "--clearmodifiers",
-            "--delay",
-            str(args.type_delay),
-            "--",
-            text,
-        ],
-        check=True,
-    )
-    return True
+    try:
+        subprocess.run(
+            [
+                xdotool,
+                "type",
+                "--clearmodifiers",
+                "--delay",
+                str(max(0, getattr(args, "type_delay", 2))),
+                "--",
+                text,
+            ],
+            check=True,
+            timeout=15.0,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def paste_clipboard(text: str, args: argparse.Namespace, shortcut: str = "ctrl+v") -> bool:
-    if display_server() == "wayland":
-        ydotool = shutil.which("ydotool")
-        if not ydotool or not copy_to_clipboard(text):
-            return False
-        time.sleep(0.15)
-        subprocess.run([ydotool, "key", shortcut], check=True)
-        return True
+    if not copy_to_clipboard(text):
+        return False
 
+    # Wayland clipboard readiness settling pause (D-08)
+    time.sleep(0.15)
+
+    server = display_server()
+    if server == "wayland":
+        backend = resolve_wayland_backend(args)
+        if backend == "wtype":
+            if shortcut == "ctrl+shift+v":
+                cmd = ["wtype", "-M", "ctrl", "-M", "shift", "-s", "20", "-k", "v", "-s", "20", "-m", "shift", "-m", "ctrl"]
+            else:
+                cmd = ["wtype", "-M", "ctrl", "-s", "20", "-k", "v", "-s", "20", "-m", "ctrl"]
+            try:
+                subprocess.run(cmd, check=True, timeout=15.0)
+                return True
+            except Exception:
+                if getattr(args, "wayland_backend", "auto") == "auto" and shutil.which("ydotool"):
+                    try:
+                        subprocess.run(["ydotool", "key", shortcut], check=True, timeout=15.0)
+                        return True
+                    except Exception:
+                        pass
+                return False
+
+        if backend == "ydotool":
+            try:
+                subprocess.run(["ydotool", "key", shortcut], check=True, timeout=15.0)
+                return True
+            except Exception:
+                return False
+
+        return False
+
+    # X11 fallback
     xdotool = shutil.which("xdotool")
     if not os.getenv("DISPLAY") or not xdotool:
         return False
-    if not copy_to_clipboard(text):
+    try:
+        subprocess.run([xdotool, "key", "--clearmodifiers", shortcut], check=True, timeout=15.0)
+        return True
+    except Exception:
         return False
-    time.sleep(0.15)
-    subprocess.run([xdotool, "key", "--clearmodifiers", shortcut], check=True)
-    return True
 
 
 def insert_text(text: str, args: argparse.Namespace) -> bool:
