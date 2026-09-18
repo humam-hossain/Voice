@@ -19,8 +19,8 @@ Requirements for initial release on Arch Linux + Hyprland. Each maps to roadmap 
 
 ### Text-to-Speech & Model Assets
 
-- [ ] **TTS-01**: Download and verify Kokoro ONNX model weights (`kokoro-v1.0.onnx`) and voice vectors (`voices-v1.0.bin`) in `models/kokoro/`.
-- [ ] **TTS-02**: Verify Wayland primary selection text capture (`wl-paste --primary`) and audio output playback via `ffplay`.
+- [x] **TTS-01**: Download and verify Kokoro ONNX model weights (`kokoro-v1.0.onnx`) and voice vectors (`voices-v1.0.bin`) in `models/kokoro/`.
+- [x] **TTS-02**: Verify Wayland primary selection text capture (`wl-paste --primary`) and audio output playback via `ffplay`.
 
 ### Hyprland Integration & Daemon Lifecycle
 
@@ -63,8 +63,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENV-02 | Phase 1 | Complete |
 | INPUT-01 | Phase 2 | Complete |
 | INPUT-02 | Phase 2 | Complete |
-| TTS-01 | Phase 3 | Pending |
-| TTS-02 | Phase 3 | Pending |
+| TTS-01 | Phase 3 | Complete |
+| TTS-02 | Phase 3 | Complete |
 | HYPR-01 | Phase 4 | Pending |
 | HYPR-02 | Phase 4 | Pending |
 | VERIF-01 | Phase 5 | Pending |
