@@ -84,9 +84,13 @@ Plans:
 **Plans**: TBD
 
 Plans:
+
+- [x] 03-01-PLAN.md
+- [ ] 03-02-PLAN.md
+
 **Wave 1**
 
-- [ ] 03-01: Download and verify Kokoro ONNX model weights and voice assets
+- [x] 03-01: Download and verify Kokoro ONNX model weights and voice assets
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -139,6 +143,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Environment & Audio Subsystem | 2/2 | Complete    | 2026-09-18 |
 | 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
-| 3. Text-to-Speech & Model Asset Pipeline | 0/2 | Not started | - |
+| 3. Text-to-Speech & Model Asset Pipeline | 1/2 | In Progress|  |
 | 4. Hyprland Integration & Daemon Lifecycle | 0/2 | Not started | - |
 | 5. End-to-End System Verification | 0/2 | Not started | - |
