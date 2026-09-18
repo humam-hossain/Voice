@@ -84,8 +84,12 @@ Plans:
 **Plans**: TBD
 
 Plans:
+**Wave 1**
 
 - [ ] 03-01: Download and verify Kokoro ONNX model weights and voice assets
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 03-02: Verify Wayland primary selection text capture and audio playback
 
 ### Phase 4: Hyprland Integration & Daemon Lifecycle
