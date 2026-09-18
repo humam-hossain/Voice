@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -170,24 +172,277 @@ class TestKokoroAssetManagement(unittest.TestCase):
 
 
 class TestTtsTextNormalization(unittest.TestCase):
-    """Placeholder test stub for Plan 03-02 text normalization."""
+    """Test suite for conservative text normalization, length bounding, and stdin piping."""
 
-    def test_normalization_stub(self) -> None:
-        pass
+    def test_ansi_escape_stripping(self) -> None:
+        raw = "\x1B[31mRed Alert\x1B[0m: status \x1B[1mCRITICAL\x1B[22m"
+        self.assertEqual(voice.normalize_tts_text(raw), "Red Alert: status CRITICAL")
+
+    def test_markdown_links(self) -> None:
+        raw = "Read the [official docs](https://github.com/thewh1teagle/kokoro-onnx) for details."
+        self.assertEqual(voice.normalize_tts_text(raw), "Read the official docs for details.")
+
+    def test_raw_urls_to_domains(self) -> None:
+        raw = "Check https://github.com/thewh1teagle/kokoro-onnx/releases and http://example.org/test."
+        self.assertEqual(voice.normalize_tts_text(raw), "Check github.com and example.org.")
+
+    def test_code_snake_case_conversion(self) -> None:
+        raw = "Run `download_file_with_progress` and check `tts_speed`."
+        self.assertEqual(
+            voice.normalize_tts_text(raw),
+            "Run download file with progress and check tts speed.",
+        )
+
+    def test_markdown_formatting_removal(self) -> None:
+        raw = (
+            "# Main Heading\n\n"
+            "```python\nprint('hello')\n```\n\n"
+            "> A blockquote\n\n"
+            "- First item\n"
+            "* Second item\n\n"
+            "Here is **bold** text and *italic* text."
+        )
+        normalized = voice.normalize_tts_text(raw)
+        self.assertNotIn("#", normalized)
+        self.assertNotIn("```", normalized)
+        self.assertNotIn(">", normalized)
+        self.assertNotIn("*", normalized)
+        self.assertIn("Main Heading. print('hello') A blockquote. First item. Second item. Here is bold text and italic text.", normalized)
+
+    def test_path_slashes_to_pauses(self) -> None:
+        raw = "Inspect /home/user/Voice/models/kokoro/voices.bin today."
+        normalized = voice.normalize_tts_text(raw)
+        self.assertEqual(
+            normalized,
+            "Inspect home, user, Voice, models, kokoro, voices.bin today.",
+        )
+
+    def test_smart_line_pauses(self) -> None:
+        raw = "First line without punctuation\nSecond line\nThird line."
+        normalized = voice.normalize_tts_text(raw)
+        self.assertEqual(normalized, "First line without punctuation. Second line. Third line.")
+
+    def test_unicode_punctuation(self) -> None:
+        raw = "Speech—offline–fast with ‘smart’ quotes and “double” quotes."
+        normalized = voice.normalize_tts_text(raw)
+        self.assertEqual(
+            normalized,
+            'Speech, offline, fast with \'smart\' quotes and "double" quotes.',
+        )
+
+    def test_length_bounding_and_warning_toast(self) -> None:
+        args = argparse.Namespace(notify=True)
+        short_text = "A" * 100
+        bounded, truncated = voice.bound_tts_text(short_text, args)
+        self.assertFalse(truncated)
+        self.assertEqual(len(bounded), 100)
+
+        long_text = "B" * 6000
+        with patch("voice.notify") as mock_notify:
+            bounded, truncated = voice.bound_tts_text(long_text, args)
+            self.assertTrue(truncated)
+            self.assertEqual(len(bounded), 5000)
+            mock_notify.assert_called_once()
+            self.assertIn("truncated", mock_notify.call_args[0][1].lower())
+
+    def test_empty_text_upfront_abort(self) -> None:
+        args = argparse.Namespace(
+            notify=True,
+            beep=True,
+            tts_backend="kokoro",
+            tts_voice="af_heart",
+            tts_speed=1.2,
+        )
+        with patch("voice.notify") as mock_notify, \
+             patch("voice.play_cue") as mock_cue, \
+             patch("subprocess.Popen") as mock_popen:
+            code = voice.start_tts_background("   \n\t  ", args)
+            self.assertEqual(code, 1)
+            mock_notify.assert_called_with("Voice TTS", "No text to speak.", args)
+            mock_cue.assert_called_with(args, "error")
+            mock_popen.assert_not_called()
+
+    def test_stdin_piping(self) -> None:
+        import io
+
+        args = argparse.Namespace(
+            speak="-",
+            tts_backend="kokoro",
+            tts_voice="af_heart",
+            tts_speed=1.2,
+            notify=True,
+            beep=True,
+            download_tts_assets=False,
+            list_tts_voices=False,
+            tts_check=False,
+            tts_background=False,
+            stop_tts=False,
+            speak_selection=False,
+            test_beep=False,
+            list_devices=False,
+            install_hotkey=False,
+            install_hotkeys=False,
+            status=False,
+            toggle=False,
+            record_background=False,
+            check=False,
+            terminal=False,
+        )
+        with patch("voice.parse_args", return_value=args), \
+             patch("sys.stdin", io.StringIO("Piped text from stdin")), \
+             patch("voice.start_tts_background", return_value=0) as mock_start:
+            code = voice.main()
+            self.assertEqual(code, 0)
+            mock_start.assert_called_once_with("Piped text from stdin", args, source="stdin")
 
 
 class TestWaylandSelectionCapture(unittest.TestCase):
-    """Placeholder test stub for Plan 03-02 Wayland selection capture."""
+    """Test suite for Wayland primary selection capture, timeout, fallback, and error handling."""
 
-    def test_selection_stub(self) -> None:
-        pass
+    def test_primary_prioritized_over_clipboard(self) -> None:
+        with patch("voice.read_x_selection") as mock_read:
+            mock_read.side_effect = lambda sel: "primary text" if sel == "primary" else "clipboard text"
+            text, source = voice.selected_or_clipboard_text()
+            self.assertEqual(text, "primary text")
+            self.assertEqual(source, "selection")
+
+    def test_fallback_to_clipboard_when_primary_empty(self) -> None:
+        with patch("voice.read_x_selection") as mock_read:
+            mock_read.side_effect = lambda sel: "" if sel == "primary" else "clipboard text"
+            text, source = voice.selected_or_clipboard_text()
+            self.assertEqual(text, "clipboard text")
+            self.assertEqual(source, "clipboard")
+
+    def test_timeout_on_unresponsive_wayland_client(self) -> None:
+        import subprocess
+
+        with patch("voice.display_server", return_value="wayland"), \
+             patch.dict("os.environ", {"WAYLAND_DISPLAY": "wayland-1"}), \
+             patch("shutil.which", return_value="/usr/bin/wl-paste"), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["wl-paste"], timeout=1.0)):
+            result = voice.read_x_selection("primary")
+            self.assertEqual(result, "")
+
+    def test_empty_selection_error_chime_and_notification(self) -> None:
+        args = argparse.Namespace(notify=True, beep=True, tts_backend="kokoro")
+        with patch("voice.read_pid", return_value=None), \
+             patch("voice.selected_or_clipboard_text", return_value=("", "")), \
+             patch("voice.notify") as mock_notify, \
+             patch("voice.play_cue") as mock_cue, \
+             patch("voice.start_tts_background") as mock_start:
+            code = voice.speak_selection(args)
+            self.assertEqual(code, 1)
+            mock_notify.assert_called_with("Voice TTS", "No selected text or clipboard text.", args)
+            mock_cue.assert_called_with(args, "error")
+            mock_start.assert_not_called()
+
+    def test_toast_distinguishes_source(self) -> None:
+        args = argparse.Namespace(
+            notify=True,
+            beep=True,
+            tts_backend="kokoro",
+            tts_voice="af_heart",
+            tts_speed=1.2,
+            kokoro_model=Path("models/kokoro/kokoro-v1.0.onnx"),
+            kokoro_voices=Path("models/kokoro/voices-v1.0.bin"),
+        )
+        # Test primary source
+        with patch("voice.read_pid", return_value=None), \
+             patch("voice.selected_or_clipboard_text", return_value=("Sample primary text", "selection")), \
+             patch("voice.start_tts_background", return_value=0), \
+             patch("voice.notify") as mock_notify:
+            voice.speak_selection(args)
+            mock_notify.assert_called_with("Voice TTS", 'Speaking selection: "Sample primary text"', args)
+
+        # Test clipboard fallback source
+        with patch("voice.read_pid", return_value=None), \
+             patch("voice.selected_or_clipboard_text", return_value=("Sample clipboard text", "clipboard")), \
+             patch("voice.start_tts_background", return_value=0), \
+             patch("voice.notify") as mock_notify:
+            voice.speak_selection(args)
+            mock_notify.assert_called_with("Voice TTS", 'Speaking clipboard (fallback): "Sample clipboard text"', args)
+
+    def test_toggle_behavior(self) -> None:
+        args = argparse.Namespace(notify=True, beep=True)
+        with patch("voice.read_pid", return_value=12345), \
+             patch("voice.process_alive", return_value=True), \
+             patch("voice.stop_tts", return_value=True) as mock_stop:
+            code = voice.speak_selection(args)
+            self.assertEqual(code, 0)
+            mock_stop.assert_called_once_with(args)
 
 
 class TestAudioPlaybackAndInterruption(unittest.TestCase):
-    """Placeholder test stub for Plan 03-02 audio playback and interruption."""
+    """Test suite for PipeWire stream tagging, interruption filtering, and temp GC."""
 
-    def test_playback_stub(self) -> None:
-        pass
+    def test_pipewire_stream_tagging(self) -> None:
+        with patch("shutil.which", return_value="/usr/bin/ffplay"), \
+             patch("subprocess.run") as mock_run:
+            voice.play_tts_audio(Path("/tmp/test.wav"))
+            mock_run.assert_called_once()
+            call_env = mock_run.call_args[1].get("env", {})
+            self.assertEqual(call_env.get("PULSE_PROP_application.name"), "voicemode")
+            self.assertEqual(call_env.get("PULSE_PROP_media.name"), "voicemode-tts")
+
+    def test_clean_interruption_filter(self) -> None:
+        import subprocess
+
+        with patch("shutil.which", return_value="/usr/bin/ffplay"):
+            for sig in (-15, -2, 255, 143, 130):
+                with (
+                    patch("subprocess.run", side_effect=subprocess.CalledProcessError(returncode=sig, cmd="ffplay")),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    voice.play_tts_audio(Path("/tmp/test.wav"))
+
+            # Non-interruption error should re-raise CalledProcessError
+            with (
+                patch("subprocess.run", side_effect=subprocess.CalledProcessError(returncode=1, cmd="ffplay")),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                voice.play_tts_audio(Path("/tmp/test.wav"))
+
+    def test_stop_tts_terminates_process_group_and_notifies(self) -> None:
+        import signal
+
+        args = argparse.Namespace(notify=True)
+        with patch("voice.read_pid", return_value=9999), \
+             patch("voice.process_alive", return_value=True), \
+             patch("os.killpg") as mock_killpg, \
+             patch("voice.remove_pid") as mock_remove_pid, \
+             patch("voice.notify") as mock_notify, \
+             patch("voice.cleanup_stale_tts_files"):
+            stopped = voice.stop_tts(args)
+            self.assertTrue(stopped)
+            mock_killpg.assert_called_once_with(9999, signal.SIGTERM)
+            mock_remove_pid.assert_called_once_with(9999, voice.TTS_PID_FILE)
+            mock_notify.assert_called_with("Voice TTS", "Speech stopped.", args)
+
+    def test_cleanup_stale_tts_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            with patch("voice.STATE_DIR", tmp_path):
+                old_wav = tmp_path / "voice-tts-old.wav"
+                new_wav = tmp_path / "voice-tts-new.wav"
+                old_txt = tmp_path / "voice-tts-old.txt"
+                other_file = tmp_path / "keep_me.txt"
+
+                old_wav.write_text("old")
+                new_wav.write_text("new")
+                old_txt.write_text("old text")
+                other_file.write_text("unrelated")
+
+                # Backdate old files by 3600 seconds (1 hour)
+                old_time = time.time() - 3600
+                os.utime(old_wav, (old_time, old_time))
+                os.utime(old_txt, (old_time, old_time))
+
+                removed = voice.cleanup_stale_tts_files(max_age_seconds=1800)
+                self.assertEqual(removed, 2)
+                self.assertFalse(old_wav.exists())
+                self.assertFalse(old_txt.exists())
+                self.assertTrue(new_wav.exists())
+                self.assertTrue(other_file.exists())
 
 
 if __name__ == "__main__":

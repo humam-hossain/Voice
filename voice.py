@@ -63,6 +63,7 @@ DEFAULT_KOKORO_VOICE = "af_heart"
 SECONDARY_KOKORO_VOICE = "bm_george"
 DEFAULT_KOKORO_LANG = "en-us"
 MAX_RECORDING_SECONDS = 300.0
+DEFAULT_TTS_MAX_CHARS = int(os.getenv("VOICE_TTS_MAX_CHARS", "5000"))
 
 KOKORO_ASSETS = [
     {
@@ -368,8 +369,88 @@ def download_tts_assets(args: argparse.Namespace) -> int:
 
 
 def normalize_tts_text(text: str) -> str:
-    normalized = re.sub(r"\s+", " ", text).strip()
-    return normalized.replace("—", ", ").replace("’", "'")
+    if not text or not text.strip():
+        return ""
+
+    # Strip ANSI escape sequences
+    text = re.sub(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", text)
+
+    # Markdown links: [anchor](url) -> anchor
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+
+    # URLs: domain summaries
+    def _clean_url(match: re.Match) -> str:
+        domain = match.group(1)
+        full = match.group(0)
+        trailing_punct = ""
+        while full and full[-1] in ".,;:!?)]}":
+            trailing_punct = full[-1] + trailing_punct
+            full = full[:-1]
+        return domain + trailing_punct
+
+    text = re.sub(r"https?://(?:www\.)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:/[^\s]*)?", _clean_url, text)
+
+    # Code identifiers: snake_case to words
+    text = re.sub(r"(?<=\w)_(?=\w)", " ", text)
+
+    # Markdown cleanup
+    text = re.sub(r"```[a-zA-Z0-9_-]*\n?", "", text)
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = text.replace("`", "")
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", text)
+
+    # Path slashes to pauses
+    text = re.sub(r"(?<=[a-zA-Z0-9])/(?=[a-zA-Z0-9])", ", ", text)
+    text = re.sub(r"(^|\s)/+", r"\1", text)
+
+    # Smart line pauses on unpunctuated line breaks
+    text = re.sub(r"([a-zA-Z0-9])\s*\n+", r"\1. ", text)
+
+    # Unicode punctuation normalization
+    text = text.replace("—", ", ").replace("–", ", ")
+    text = text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+
+    # Collapse whitespace
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def bound_tts_text(text: str, args: argparse.Namespace) -> tuple[str, bool]:
+    max_chars = getattr(args, "tts_max_chars", None)
+    if max_chars is None:
+        max_chars = DEFAULT_TTS_MAX_CHARS
+    try:
+        max_chars = int(max_chars)
+    except (TypeError, ValueError):
+        max_chars = 5000
+
+    if len(text) > max_chars:
+        truncated = text[:max_chars].strip()
+        notify("Voice TTS Warning", f"Selection truncated to {max_chars:,} characters.", args)
+        return truncated, True
+    return text, False
+
+
+def cleanup_stale_tts_files(max_age_seconds: int = 1800) -> int:
+    if not STATE_DIR.is_dir():
+        return 0
+    now = time.time()
+    removed = 0
+    patterns = ("voice-tts-*.wav", "voice-tts-*.mp3", "voice-tts-*.txt")
+    for pattern in patterns:
+        for file_path in STATE_DIR.glob(pattern):
+            try:
+                if (now - file_path.stat().st_mtime) > max_age_seconds:
+                    file_path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def play_tone(args: argparse.Namespace, frequency: float, duration: float) -> None:
@@ -411,7 +492,7 @@ def play_cue(args: argparse.Namespace, cue: str) -> None:
         "start": ((880, 0.07),),
         "recording": ((1046, 0.055),),
         "stop": ((1175, 0.07), (0, 0.03), (660, 0.11)),
-        "error": ((220, 0.12), (0, 0.04), (220, 0.12)),
+        "error": ((300, 0.08), (0, 0.03), (200, 0.10)),
     }
     for frequency, duration in patterns.get(cue, ()):
         if frequency <= 0:
@@ -734,7 +815,9 @@ def read_x_selection(selection: str) -> str:
         if selection == "primary":
             command.append("--primary")
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return ""
         except Exception:
             return ""
         return result.stdout.strip() if result.returncode == 0 else ""
@@ -830,11 +913,20 @@ def play_tts_audio(audio_path: Path) -> None:
     ffplay = shutil.which("ffplay")
     if not ffplay:
         raise RuntimeError("ffplay is required to play TTS audio")
-    subprocess.run(
-        [ffplay, "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "error", str(audio_path)],
-        check=True,
-        stdin=subprocess.DEVNULL,
-    )
+    pulse_env = os.environ.copy()
+    pulse_env["PULSE_PROP_application.name"] = "voicemode"
+    pulse_env["PULSE_PROP_media.name"] = "voicemode-tts"
+    try:
+        subprocess.run(
+            [ffplay, "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "error", str(audio_path)],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            env=pulse_env,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode in (-signal.SIGTERM, -signal.SIGINT, -15, -2, 255, 143, 130):
+            raise KeyboardInterrupt from exc
+        raise
 
 
 def stop_tts(args: argparse.Namespace, *, quiet: bool = False) -> bool:
@@ -850,6 +942,7 @@ def stop_tts(args: argparse.Namespace, *, quiet: bool = False) -> bool:
             except ProcessLookupError:
                 pass
         remove_pid(pid, TTS_PID_FILE)
+        cleanup_stale_tts_files()
         if not quiet:
             print("Stopped voice TTS.")
             notify("Voice TTS", "Speech stopped.", args)
@@ -857,6 +950,7 @@ def stop_tts(args: argparse.Namespace, *, quiet: bool = False) -> bool:
 
     if pid:
         remove_pid(pid, TTS_PID_FILE)
+    cleanup_stale_tts_files()
     if not quiet:
         print("Voice TTS is idle.")
     return False
@@ -889,11 +983,28 @@ def tts_background_argv(args: argparse.Namespace, text_file: Path) -> list[str]:
 
 
 def start_tts_background(text: str, args: argparse.Namespace, source: str = "text") -> int:
-    text = text.strip()
-    if not text:
+    cleanup_stale_tts_files()
+    norm_text = normalize_tts_text(text)
+    bounded_text, _ = bound_tts_text(norm_text, args)
+    if not bounded_text:
         notify("Voice TTS", "No text to speak.", args)
+        play_cue(args, "error")
         print("No text to speak.")
         return 1
+
+    if args.tts_backend == "kokoro":
+        model_path = Path(args.kokoro_model).expanduser()
+        voices_path = Path(args.kokoro_voices).expanduser()
+        model_ok = model_path.is_file() and model_path.stat().st_size >= 300_000_000
+        voices_ok = voices_path.is_file() and voices_path.stat().st_size >= 20_000_000
+        if not model_ok or not voices_ok:
+            notify("Voice TTS Error", "Kokoro assets missing. Run --download-tts-assets.", args)
+            play_cue(args, "error")
+            print(
+                "Kokoro TTS assets missing. Download them with: python voice.py --download-tts-assets",
+                file=sys.stderr,
+            )
+            return 1
 
     stop_tts(args, quiet=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -902,7 +1013,7 @@ def start_tts_background(text: str, args: argparse.Namespace, source: str = "tex
     )
     text_file = Path(temp.name)
     with temp:
-        temp.write(text)
+        temp.write(bounded_text)
 
     log = TTS_LOG_FILE.open("a", encoding="utf-8")
     log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} speak {source} ---\n")
@@ -921,6 +1032,7 @@ def start_tts_background(text: str, args: argparse.Namespace, source: str = "tex
 
 
 def speak_selection(args: argparse.Namespace) -> int:
+    cleanup_stale_tts_files()
     pid = read_pid(TTS_PID_FILE)
     if pid and process_alive(pid):
         stop_tts(args)
@@ -928,12 +1040,43 @@ def speak_selection(args: argparse.Namespace) -> int:
     if pid:
         remove_pid(pid, TTS_PID_FILE)
 
-    text, source = selected_or_clipboard_text()
-    if not text:
+    raw_text, source = selected_or_clipboard_text()
+    if not raw_text:
         notify("Voice TTS", "No selected text or clipboard text.", args)
+        play_cue(args, "error")
         print("No selected text or clipboard text.")
         return 1
-    return start_tts_background(text, args, source)
+
+    norm_text = normalize_tts_text(raw_text)
+    bounded_text, _ = bound_tts_text(norm_text, args)
+    if not bounded_text:
+        notify("Voice TTS", "No text to speak.", args)
+        play_cue(args, "error")
+        print("No text to speak.")
+        return 1
+
+    if args.tts_backend == "kokoro":
+        model_path = Path(args.kokoro_model).expanduser()
+        voices_path = Path(args.kokoro_voices).expanduser()
+        model_ok = model_path.is_file() and model_path.stat().st_size >= 300_000_000
+        voices_ok = voices_path.is_file() and voices_path.stat().st_size >= 20_000_000
+        if not model_ok or not voices_ok:
+            notify("Voice TTS Error", "Kokoro assets missing. Run --download-tts-assets.", args)
+            play_cue(args, "error")
+            print(
+                "Kokoro TTS assets missing. Download them with: python voice.py --download-tts-assets",
+                file=sys.stderr,
+            )
+            return 1
+
+    preview = (bounded_text[:60] + "...") if len(bounded_text) > 60 else bounded_text
+    if source == "selection":
+        toast_msg = f'Speaking selection: "{preview}"'
+    else:
+        toast_msg = f'Speaking clipboard (fallback): "{preview}"'
+    notify("Voice TTS", toast_msg, args)
+
+    return start_tts_background(bounded_text, args, source)
 
 
 def run_tts_background(args: argparse.Namespace) -> int:
@@ -1544,7 +1687,8 @@ def main() -> int:
     if args.speak_selection:
         return speak_selection(args)
     if args.speak is not None:
-        return start_tts_background(args.speak, args)
+        speak_text = sys.stdin.read() if args.speak == "-" else args.speak
+        return start_tts_background(speak_text, args, source="stdin" if args.speak == "-" else "text")
     if args.test_beep:
         play_cue(args, "start")
         time.sleep(0.4)
