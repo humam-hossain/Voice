@@ -55,6 +55,7 @@ DEFAULT_TTS_BACKEND = "kokoro"
 DEFAULT_KOKORO_VOICE = "af_heart"
 SECONDARY_KOKORO_VOICE = "bm_george"
 DEFAULT_KOKORO_LANG = "en-us"
+MAX_RECORDING_SECONDS = 300.0
 
 
 @dataclass
@@ -298,7 +299,10 @@ def load_model(args: argparse.Namespace, *, force_cpu: bool = False) -> ModelSta
 
 
 def transcribe(model_state: ModelState, wav_path: Path, args: argparse.Namespace) -> tuple[str, ModelState]:
-    kwargs = {"beam_size": args.beam_size}
+    kwargs = {
+        "beam_size": args.beam_size,
+        "vad_filter": getattr(args, "vad_filter", True),
+    }
     if args.language:
         kwargs["language"] = args.language
 
@@ -866,6 +870,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
         )
 
         while not stop_requested:
+            if recorder.started_at and (time.monotonic() - recorder.started_at) >= MAX_RECORDING_SECONDS:
+                print(
+                    f"Safety ceiling: reached maximum duration ({int(MAX_RECORDING_SECONDS)}s). Stopping recording.",
+                    flush=True,
+                )
+                notify(APP_NAME, f"Max recording duration ({int(MAX_RECORDING_SECONDS)}s) reached. Transcribing...", args)
+                break
             if next_recording_cue is not None and time.monotonic() >= next_recording_cue:
                 play_cue(args, "recording")
                 next_recording_cue = time.monotonic() + args.recording_beep_interval
@@ -1074,11 +1085,24 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     tts_defaults = load_hermes_tts_defaults()
     parser = argparse.ArgumentParser(description="Desktop-global STT and TTS voice command.")
-    parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "base"))
-    parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "auto"))
-    parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "auto"))
-    parser.add_argument("--language", default=os.getenv("VOICE_STT_LANGUAGE", ""))
-    parser.add_argument("--beam-size", type=int, default=int(os.getenv("VOICE_STT_BEAM_SIZE", "5")))
+    parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "small.en"))
+    parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "cpu"))
+    parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "int8"))
+    parser.add_argument("--language", default=os.getenv("VOICE_STT_LANGUAGE", "en"))
+    parser.add_argument("--beam-size", type=int, default=int(os.getenv("VOICE_STT_BEAM_SIZE", "1")))
+    parser.add_argument(
+        "--vad-filter",
+        dest="vad_filter",
+        action="store_true",
+        default=env_bool("VOICE_VAD_FILTER", True),
+        help="Enable Silero VAD filter to trim silence (default: True).",
+    )
+    parser.add_argument(
+        "--no-vad-filter",
+        dest="vad_filter",
+        action="store_false",
+        help="Disable Silero VAD filter.",
+    )
     parser.add_argument("--input-device", default=os.getenv("VOICE_INPUT_DEVICE"))
     parser.add_argument("--sample-rate", type=int, default=None)
     parser.add_argument("--save-dir", type=Path, default=None, help="Keep recorded wav files in this directory.")
