@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-19)
 Phase: Milestone v1.0 complete (shipped)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-19 — Completed quick task 260919-lm1: Add complete voice parameters and ranges list to README.md
+Last activity: 2026-09-19 — Completed quick task 260919-m0b: Create issue.md to track missing download progress bar
 
 ## Performance Metrics
 
@@ -83,6 +83,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260919-lm1 | Add complete voice parameters and ranges list to README.md | 2026-09-19 | b3d4218 | [260919-lm1-add-complete-voice-parameters-and-ranges](./quick/260919-lm1-add-complete-voice-parameters-and-ranges/) |
+| 260919-m0b | Create issue.md to track missing download progress bar | 2026-09-19 | 8c324ce | [260919-m0b-create-issue-md-to-track-missing-downloa](./quick/260919-m0b-create-issue-md-to-track-missing-downloa/) |
 
 ## Deferred Items
 
