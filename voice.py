@@ -1711,14 +1711,303 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
                 print("Press Ctrl+B to record again. Ctrl+C exits.")
     except KeyboardInterrupt:
         print("\nExiting.")
+def check_binary(name: str, pkg_hint: str) -> tuple[bool, str, str]:
+    """Check availability of a system binary."""
+    path = shutil.which(name)
+    if path:
+        return True, path, ""
+    return False, "missing", pkg_hint
+
+
+def check_audio_source_status() -> tuple[bool, str, str]:
+    """Check WirePlumber default audio input source volume and mute state."""
+    wpctl = shutil.which("wpctl")
+    if not wpctl:
+        return False, "wpctl unavailable", "sudo pacman -S wireplumber"
+    try:
+        res = subprocess.run(
+            [wpctl, "get-volume", "@DEFAULT_AUDIO_SOURCE@"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            return False, "Failed to query @DEFAULT_AUDIO_SOURCE@", "Verify PipeWire/WirePlumber services"
+        output = res.stdout.strip()
+        if "[MUTED]" in output:
+            return (
+                False,
+                output,
+                "Unmute with: wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0 (or press SUPER + M)",
+            )
+        return True, f"{output} (Active)", ""
+    except Exception as e:
+        return False, f"Audio check error: {e}", "Verify PipeWire/WirePlumber services"
+
+
+def check_models_status(
+    stt_model: str = "small.en",
+    kokoro_model: Path | None = None,
+    kokoro_voices: Path | None = None,
+) -> list[tuple[str, bool, str, str]]:
+    """Check availability and size of STT and TTS models."""
+    results: list[tuple[str, bool, str, str]] = []
+
+    hf_hub_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    whisper_match = False
+    details = ""
+    if hf_hub_dir.exists():
+        for d in hf_hub_dir.iterdir():
+            if f"faster-whisper-{stt_model}" in d.name:
+                whisper_match = True
+                details = f"Cached in ~/.cache/huggingface/hub/{d.name}"
+                break
+    if whisper_match:
+        results.append((f"Faster-Whisper ({stt_model})", True, details, ""))
+    else:
+        results.append((
+            f"Faster-Whisper ({stt_model})",
+            False,
+            "Missing in local HuggingFace cache",
+            "Run: voice --check --allow-download",
+        ))
+
+    k_model = kokoro_model or default_kokoro_model_path()
+    if k_model.exists():
+        try:
+            sz = k_model.stat().st_size
+            if sz >= 300_000_000:
+                results.append(("Kokoro ONNX Model", True, f"Verified ({sz / (1024*1024):.1f} MB)", ""))
+            else:
+                results.append((
+                    "Kokoro ONNX Model",
+                    False,
+                    f"Undersized ({sz} bytes < 300MB)",
+                    "scripts/download-kokoro-assets.sh",
+                ))
+        except OSError as e:
+            results.append(("Kokoro ONNX Model", False, f"File error: {e}", "scripts/download-kokoro-assets.sh"))
+    else:
+        results.append(("Kokoro ONNX Model", False, f"Missing at {k_model}", "scripts/download-kokoro-assets.sh"))
+
+    k_voices = kokoro_voices or default_kokoro_voices_path()
+    if k_voices.exists():
+        try:
+            sz = k_voices.stat().st_size
+            if sz >= 20_000_000:
+                results.append(("Kokoro Voices File", True, f"Verified ({sz / (1024*1024):.1f} MB)", ""))
+            else:
+                results.append((
+                    "Kokoro Voices File",
+                    False,
+                    f"Undersized ({sz} bytes < 20MB)",
+                    "scripts/download-kokoro-assets.sh",
+                ))
+        except OSError as e:
+            results.append(("Kokoro Voices File", False, f"File error: {e}", "scripts/download-kokoro-assets.sh"))
+    else:
+        results.append(("Kokoro Voices File", False, f"Missing at {k_voices}", "scripts/download-kokoro-assets.sh"))
+
+    return results
+
+
+def check_hyprland_keybinds_status(config_path: Path | None = None) -> tuple[bool, str, str]:
+    """Check Hyprland keybinding integration and GNU Stow symlink preservation."""
+    path = config_path if config_path is not None else HYPRLAND_CUSTOM_KEYBINDS_PATH
+    if not path.exists():
+        return False, f"Not found at {path}", "Run: voice --install-hotkey"
+
+    is_sym = path.is_symlink()
+    try:
+        real_target = path.resolve()
+        target_info = f" (symlink -> {real_target})" if is_sym else ""
+    except Exception:
+        target_info = " (symlink)" if is_sym else ""
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"Unreadable at {path}: {e}", "Check file permissions"
+
+    has_block = "-- voicemode start" in content and "-- voicemode end" in content
+    has_toggle = "SUPER + SHIFT + M" in content and "--toggle" in content
+    has_speak = "SUPER + T" in content and "--speak-selection" in content
+    has_unbind = 'hl.unbind("SUPER + T")' in content
+
+    if has_block and has_toggle and has_speak and has_unbind:
+        return True, f"Verified{target_info}", ""
+
+    missing = []
+    if not has_block:
+        missing.append("delimiters")
+    if not has_toggle:
+        missing.append("SUPER+SHIFT+M")
+    if not has_speak:
+        missing.append("SUPER+T")
+    if not has_unbind:
+        missing.append('unbind("SUPER + T")')
+    return False, f"Incomplete ({', '.join(missing)}){target_info}", "Run: voice --install-hotkey"
+
+
+def check_daemon_pid_health() -> list[tuple[str, bool, str, str]]:
+    """Check health of recorder and TTS daemon PID files."""
+    results: list[tuple[str, bool, str, str]] = []
+    for name, pid_path in [("STT Recorder", PID_FILE), ("TTS Player", TTS_PID_FILE)]:
+        if pid_path.exists():
+            pid, state = read_pid_state(pid_path)
+            if pid is not None and process_alive(pid):
+                results.append((name, True, f"Running (PID {pid}, state: {state})", ""))
+            else:
+                results.append((
+                    name,
+                    False,
+                    f"Stale lock (PID {pid} dead, state: {state})",
+                    "Recover with: voice --kill (inspect voice --watch)",
+                ))
+        else:
+            results.append((name, True, "Idle (no PID file)", ""))
+    return results
+
+
 def kill_all_daemons(args: argparse.Namespace) -> int:
     """Terminate active background workers and purge stale PID files."""
+    cleaned = 0
+    for name, pid_path in [("STT Recorder", PID_FILE), ("TTS Player", TTS_PID_FILE)]:
+        if pid_path.exists():
+            pid, state = read_pid_state(pid_path)
+            if pid is not None and process_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    print(f"Terminated active {name} (PID {pid}).")
+                    cleaned += 1
+                except (ProcessLookupError, PermissionError, OSError) as e:
+                    print(f"Could not signal {name} (PID {pid}): {e}")
+            else:
+                print(f"Removed stale lock for {name} (PID {pid}, state: {state}).")
+                cleaned += 1
+            remove_pid(path=pid_path)
+    if cleaned == 0:
+        print("No active daemons or stale PID locks found.")
+    else:
+        print("Daemon recovery complete. State reset to idle.")
     return 0
 
 
 def run_doctor(args: argparse.Namespace) -> int:
     """Run system pre-flight diagnostic probe."""
-    return 0
+    import json as json_lib
+
+    binary_checks = [
+        ("wtype", "sudo pacman -S wtype"),
+        ("wl-copy", "sudo pacman -S wl-clipboard"),
+        ("wl-paste", "sudo pacman -S wl-clipboard"),
+        ("ffplay", "sudo pacman -S ffmpeg"),
+        ("wpctl", "sudo pacman -S wireplumber"),
+        ("hyprctl", "sudo pacman -S hyprland"),
+    ]
+    binary_results = []
+    critical_failures = 0
+    for name, hint in binary_checks:
+        ok, path_or_status, rem = check_binary(name, hint)
+        binary_results.append({"binary": name, "ok": ok, "details": path_or_status, "remediation": rem})
+        if not ok and name in ("wtype", "wl-copy", "wl-paste", "ffplay", "wpctl"):
+            critical_failures += 1
+
+    audio_ok, audio_details, audio_hint = check_audio_source_status()
+    audio_result = {
+        "ok": audio_ok,
+        "details": audio_details,
+        "remediation": audio_hint,
+    }
+    if not audio_ok and "[MUTED]" not in audio_details:
+        critical_failures += 1
+
+    model_results = []
+    models_data = check_models_status(
+        stt_model=getattr(args, "model", "small.en"),
+        kokoro_model=getattr(args, "kokoro_model", None),
+        kokoro_voices=getattr(args, "kokoro_voices", None),
+    )
+    for m_name, m_ok, m_details, m_hint in models_data:
+        model_results.append({"model": m_name, "ok": m_ok, "details": m_details, "remediation": m_hint})
+        if not m_ok:
+            critical_failures += 1
+
+    kb_ok, kb_details, kb_hint = check_hyprland_keybinds_status()
+    kb_result = {"ok": kb_ok, "details": kb_details, "remediation": kb_hint}
+    if not kb_ok:
+        critical_failures += 1
+
+    daemon_results = []
+    daemons_data = check_daemon_pid_health()
+    for d_name, d_ok, d_details, d_hint in daemons_data:
+        daemon_results.append({"daemon": d_name, "ok": d_ok, "details": d_details, "remediation": d_hint})
+        if not d_ok:
+            critical_failures += 1
+
+    overall_ok = critical_failures == 0
+
+    if getattr(args, "json", False):
+        report = {
+            "status": "pass" if overall_ok else "fail",
+            "critical_failures": critical_failures,
+            "binaries": binary_results,
+            "audio": audio_result,
+            "models": model_results,
+            "keybinds": kb_result,
+            "daemons": daemon_results,
+        }
+        print(json_lib.dumps(report, indent=2))
+        return 0 if overall_ok else 1
+
+    print("=" * 66)
+    print("         VOICEMODE SYSTEM PRE-FLIGHT DIAGNOSTICS (DOCTOR)")
+    print("=" * 66)
+
+    print("\n[1. System Binaries]")
+    for b in binary_results:
+        tag = "[PASS]" if b["ok"] else "[FAIL]"
+        print(f"  {tag:<6} {b['binary']:<10} {b['details']}")
+        if not b["ok"]:
+            print(f"         Remediation: {b['remediation']}")
+
+    print("\n[2. PipeWire/WirePlumber Audio]")
+    a_tag = "[PASS]" if audio_ok else ("[WARN]" if "[MUTED]" in audio_details else "[FAIL]")
+    print(f"  {a_tag:<6} Default Source: {audio_details}")
+    if audio_hint:
+        print(f"         Remediation: {audio_hint}")
+
+    print("\n[3. Speech & TTS Models]")
+    for m in model_results:
+        tag = "[PASS]" if m["ok"] else "[FAIL]"
+        print(f"  {tag:<6} {m['model']:<28} {m['details']}")
+        if not m["ok"]:
+            print(f"         Remediation: {m['remediation']}")
+
+    print("\n[4. Hyprland Keybinding Integration]")
+    k_tag = "[PASS]" if kb_ok else "[FAIL]"
+    print(f"  {k_tag:<6} custom/keybinds.lua: {kb_details}")
+    if not kb_ok:
+        print(f"         Remediation: {kb_hint}")
+
+    print("\n[5. Background Daemon Health]")
+    for d in daemon_results:
+        tag = "[PASS]" if d["ok"] else "[FAIL]"
+        print(f"  {tag:<6} {d['daemon']:<14} {d['details']}")
+        if not d["ok"]:
+            print(f"         Remediation: {d['remediation']}")
+
+    print("\n" + "=" * 66)
+    if overall_ok:
+        if "[MUTED]" in audio_details:
+            print("DIAGNOSTIC STATUS: READY WITH WARNING (Mic currently muted)")
+        else:
+            print("DIAGNOSTIC STATUS: ALL CHECKS PASSED (System Healthy)")
+    else:
+        print(f"DIAGNOSTIC STATUS: FAILED ({critical_failures} critical issue(s) detected)")
+    print("=" * 66)
+
+    return 0 if overall_ok else 1
 
 
 def run_verification(args: argparse.Namespace) -> int:
