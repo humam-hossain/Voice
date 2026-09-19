@@ -56,6 +56,7 @@ GNOME_TTS_BINDING_SCHEMA = (
     "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
     f"{GNOME_TTS_BINDING_PATH}"
 )
+HYPRLAND_CUSTOM_KEYBINDS_PATH = Path.home() / ".config" / "hypr" / "custom" / "keybinds.lua"
 DEFAULT_TTS_VOICE = "en-GB-RyanNeural"
 DEFAULT_TTS_SPEED = 1.2
 DEFAULT_TTS_BACKEND = "kokoro"
@@ -1405,6 +1406,75 @@ def install_gnome_hotkey() -> int:
     return 0
 
 
+def generate_hyprland_block() -> str:
+    return (
+        "-- voicemode start\n"
+        'hl.unbind("SUPER + T")\n'
+        'hl.bind("SUPER + SHIFT + M", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), { description = "Voice STT: Push-to-talk toggle" })\n'
+        'hl.bind("SUPER + T", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), { description = "Voice TTS: Speak selection" })\n'
+        "-- voicemode end\n"
+    )
+
+
+def is_hyprland_session() -> bool:
+    if os.getenv("HYPRLAND_INSTANCE_SIGNATURE"):
+        return True
+    if os.getenv("XDG_CURRENT_DESKTOP") == "Hyprland":
+        return True
+    if shutil.which("hyprctl") and os.getenv("WAYLAND_DISPLAY"):
+        return True
+    return False
+
+
+def print_hyprland_keybinds() -> int:
+    sys.stdout.write(generate_hyprland_block())
+    sys.stdout.flush()
+    return 0
+
+
+def install_hyprland_keybinds(config_path: Optional[Path] = None) -> int:
+    raw_path = config_path if config_path is not None else HYPRLAND_CUSTOM_KEYBINDS_PATH
+    resolved_path = raw_path.resolve()
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+    block = generate_hyprland_block()
+    pattern = re.compile(r"-- voicemode start\n.*?-- voicemode end\n?", re.DOTALL)
+
+    if resolved_path.exists():
+        content = resolved_path.read_text(encoding="utf-8")
+    else:
+        content = ""
+
+    if pattern.search(content):
+        new_content = pattern.sub(block, content)
+    else:
+        if content and not content.endswith("\n"):
+            content += "\n"
+        if content and not content.endswith("\n\n"):
+            content += "\n"
+        new_content = content + block
+
+    resolved_path.write_text(new_content, encoding="utf-8")
+    print(f"Installed Hyprland keybinds to {resolved_path} (via {raw_path})")
+
+    if shutil.which("hyprctl"):
+        try:
+            subprocess.run(["hyprctl", "reload"], check=True, stdout=subprocess.DEVNULL)
+            print("Reloaded Hyprland configuration.")
+        except subprocess.CalledProcessError as exc:
+            print(f"Warning: hyprctl reload failed (exit code {exc.returncode})", file=sys.stderr)
+        except Exception as exc:
+            print(f"Warning: could not run hyprctl reload: {exc}", file=sys.stderr)
+
+    return 0
+
+
+def install_hotkeys_dispatch() -> int:
+    if is_hyprland_session():
+        return install_hyprland_keybinds()
+    return install_gnome_hotkey()
+
+
 def print_status() -> int:
     pid = read_pid()
     if pid and process_alive(pid):
@@ -1548,8 +1618,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--watch", action="store_true", help="Watch global hotkey activity in this terminal.")
     parser.add_argument("--terminal", action="store_true", help="Use terminal-only Ctrl+B recording mode.")
     parser.add_argument("--status", action="store_true", help="Print whether background recording is active.")
-    parser.add_argument("--install-hotkey", action="store_true", help="Install GNOME Super+B and Super+T shortcuts.")
-    parser.add_argument("--install-hotkeys", action="store_true", help="Install GNOME Super+B and Super+T shortcuts.")
+    parser.add_argument(
+        "--install-hotkey",
+        action="store_true",
+        help="Install desktop shortcuts (auto-detects Hyprland and GNOME).",
+    )
+    parser.add_argument(
+        "--install-hotkeys",
+        action="store_true",
+        help="Install desktop shortcuts (auto-detects Hyprland and GNOME).",
+    )
+    parser.add_argument(
+        "--print-hyprland",
+        action="store_true",
+        help="Print Hyprland keybind configuration block and exit.",
+    )
+    parser.add_argument(
+        "--install-hyprland",
+        action="store_true",
+        help="Install Hyprland keybinds to ~/.config/hypr/custom/keybinds.lua and reload.",
+    )
     parser.add_argument("--record-background", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--speak-selection", action="store_true", help="Speak selected text, falling back to clipboard text.")
     parser.add_argument("--speak", metavar="TEXT", help="Speak the provided text using TTS.")
@@ -1699,8 +1787,12 @@ def main() -> int:
     if args.list_devices:
         print(sd.query_devices())
         return 0
+    if args.print_hyprland:
+        return print_hyprland_keybinds()
+    if args.install_hyprland:
+        return install_hyprland_keybinds()
     if args.install_hotkey or args.install_hotkeys:
-        return install_gnome_hotkey()
+        return install_hotkeys_dispatch()
     if args.status:
         return print_status()
     if args.toggle:
