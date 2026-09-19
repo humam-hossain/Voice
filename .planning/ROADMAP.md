@@ -111,8 +111,12 @@ Plans:
 **Plans**: TBD
 
 Plans:
+**Wave 1**
 
 - [ ] 04-01: Document and configure Hyprland keybindings in `hyprland.conf`
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 04-02: Verify background recording daemon lifecycle and signal handling
 
 ### Phase 5: End-to-End System Verification
