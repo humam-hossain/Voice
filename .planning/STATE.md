@@ -22,11 +22,11 @@ current_phase: 05
 See: .planning/PROJECT.md (updated 2026-09-19)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Phase 05 — End-to-End System Verification
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
+Phase: Milestone v1.0 complete (shipped)
 Plan: —
 Status: Awaiting next milestone
 Last activity: 2026-09-19 — Milestone v1.0 completed and archived
