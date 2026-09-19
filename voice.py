@@ -39,7 +39,6 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-
 CTRL_B = "\x02"
 APP_NAME = "Voice STT"
 STATE_DIR = Path(os.getenv("XDG_RUNTIME_DIR", f"/tmp/voice-stt-{os.getuid()}")) / "voice-stt"
@@ -2496,7 +2495,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Terminate active background workers and purge stale PID files.",
     )
-    parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "small.en"))
+    parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "medium.en"))
     parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "cpu"))
     parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "int8"))
     parser.add_argument("--language", default=os.getenv("VOICE_STT_LANGUAGE", "en"))
