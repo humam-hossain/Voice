@@ -24,10 +24,13 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 - ✓ Kokoro model assets download, verification, and headless playback — Phase 3
 - ✓ Hyprland native Lua keybindings (`SUPER + SHIFT + M`, `SUPER + T`) with Stow symlink preservation — Phase 4
 - ✓ Daemon lifecycle hardening, double-tap race mitigation, signal differentiation, and focus-safe notifications — Phase 4
+- ✓ End-to-end verification of STT dictation and TTS playback under Hyprland — Phase 5
 
 ### Active
 
-- [ ] End-to-end verification of STT dictation and TTS playback under Hyprland
+- [ ] Automatic audio level normalization and noise suppression before transcription (ADV-01)
+- [ ] Multi-language transcription hotkey switching or dynamic language detection (ADV-02)
+- [ ] Custom voice cloning support for Kokoro TTS (ADV-03)
 
 ### Out of Scope
 
@@ -43,6 +46,7 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 - **Audio Subsystem**: PipeWire with PipeWire-Pulse / ALSA emulation.
 - **Wayland Utilities**: `wl-clipboard` (`wl-copy`, `wl-paste`), `wtype` (virtual keyboard typing), `ffmpeg` (`ffplay`).
 - **Python Management**: Managed via `uv` using Python 3.12, since Python 3.14 lacks precompiled wheels for `ctranslate2` and `onnxruntime`.
+- **Shipped State**: Shipped v1.0 with 4,406 LOC Python, 103 passing automated tests, `voice --doctor` diagnostics, and `voice --verify` integration suite.
 
 ## Constraints
 
@@ -61,6 +65,7 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 | Atomic multi-token PID state tracking | Prevent double-tap race conditions and differentiate clean stop/transcribe (`SIGUSR1`) from abort (`SIGTERM`) | ✓ Validated in Phase 4 |
 | Focus-safe notification policy | Suppress routine STT toasts to prevent Wayland active window focus stealing before `wtype` typing | ✓ Validated in Phase 4 |
 | Default to CPU int8 for STT | Intel UHD Graphics 770; CPU int8 provides fast, stable inference without complex driver setup | ✓ Validated in Phase 1 |
+| System diagnostics engine and 3-tier verification | Built-in `voice --doctor` and `voice --verify` provide self-diagnostics and live compositor validation | ✓ Validated in Phase 5 |
 
 ## Evolution
 
@@ -80,4 +85,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-19 after Phase 4*
+*Last updated: 2026-09-19 after v1.0 milestone*
