@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-19)
 Phase: Milestone v1.0 complete (shipped)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-19 — Milestone v1.0 completed and archived
+Last activity: 2026-09-19 — Completed quick task 260919-lm1: Add complete voice parameters and ranges list to README.md
 
 ## Performance Metrics
 
@@ -77,6 +77,12 @@ None yet.
 ### Blockers/Concerns
 
 None yet.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260919-lm1 | Add complete voice parameters and ranges list to README.md | 2026-09-19 | b3d4218 | [260919-lm1-add-complete-voice-parameters-and-ranges](./quick/260919-lm1-add-complete-voice-parameters-and-ranges/) |
 
 ## Deferred Items
 
