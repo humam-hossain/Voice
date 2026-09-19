@@ -113,7 +113,7 @@ Plans:
 Plans:
 
 - [x] 04-01-PLAN.md
-- [ ] 04-02-PLAN.md
+- [x] 04-02-PLAN.md
 
 **Wave 1**
 
@@ -152,5 +152,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Environment & Audio Subsystem | 2/2 | Complete    | 2026-09-18 |
 | 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
 | 3. Text-to-Speech & Model Asset Pipeline | 2/2 | Complete    | 2026-09-19 |
-| 4. Hyprland Integration & Daemon Lifecycle | 1/2 | In Progress|  |
+| 4. Hyprland Integration & Daemon Lifecycle | 2/2 | In Progress|  |
 | 5. End-to-End System Verification | 0/2 | Not started | - |
