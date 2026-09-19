@@ -135,12 +135,20 @@ Plans:
   2. Selection-to-speech speaks highlighted text from web browser or document reader.
   3. Setup guide and troubleshooting notes for Arch Linux + Hyprland are documented.
 
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
 
-- [ ] 05-01: Conduct comprehensive end-to-end tests across Wayland applications
-- [ ] 05-02: Finalize documentation and setup guide for Arch Linux
+- [ ] 05-01-PLAN.md
+- [ ] 05-02-PLAN.md
+
+**Wave 1**
+
+- [ ] 05-01: System Diagnostics Engine (`voice --doctor`), 3-Tier Verification Engine (`voice --verify`, `scripts/verify-e2e.sh`), Dynamic Hyprland Window Interrogation, and Automated Unit/Integration Test Suite (`tests/test_verification_doctor.py`)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 05-02: Arch Linux & Hyprland Documentation Overhaul (`README.md`, `docs/ARCH_HYPRLAND.md`, `docs/DEPENDENCIES.md`), Cheatsheet Table, Stow Symlink Preservation Guide, and End-to-End Operational Verification
 
 ## Progress
 
