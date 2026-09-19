@@ -1,214 +1,141 @@
 # voicemode
 
-Desktop-global speech-to-text dictation and text-to-speech utility for Arch Linux running Hyprland.
+Desktop-global speech-to-text dictation and text-to-speech utility for **Arch Linux running Hyprland**.
 
-voicemode provides low-latency push-to-talk speech transcription typing directly into the active focused window (Kitty, Foot, Neovim, VS Code, browsers) and neural on-demand text-to-speech reading of highlighted screen text via Kokoro ONNX.
+voicemode delivers seamless, low-latency push-to-talk transcription that types directly into any focused window (terminals, code editors, browsers) and on-demand neural text-to-speech reading of highlighted screen text using local, offline models on Wayland.
 
-- Dedicated Guide: [`docs/ARCH_HYPRLAND.md`](docs/ARCH_HYPRLAND.md)
-- Dependency Reference: [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
+- **Dedicated Architecture & Setup Guide:** [`docs/ARCH_HYPRLAND.md`](docs/ARCH_HYPRLAND.md)
+- **Dependency & License Reference:** [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 
-## Current Status
+---
 
-Fully tailored and validated for Arch Linux + Hyprland on Wayland:
+## At a Glance
 
-```text
-OS: Arch Linux
-Compositor: Hyprland (Wayland)
-Dotfiles: dots-hyprland (custom/keybinds.lua with GNU Stow preservation)
-Python: 3.12 (via uv venv)
-STT: faster-whisper (CPU int8)
-TTS: Kokoro via kokoro-onnx (offline ONNX runtime)
-Text injection: wtype (primary rootless Wayland virtual keyboard)
-Selection reading / Clipboard: wl-clipboard (wl-copy, wl-paste)
-```
+| Shortcut / Command | Action | Scope / Context | Audio Cue / Indicator |
+|---|---|---|---|
+| `SUPER + SHIFT + M` | **Push-to-Talk STT Toggle** | Global desktop | **Start:** 880 Hz (A5) high chime<br/>**Reminder:** 1046 Hz (C6) tick every 5s<br/>**Stop:** 1175 Hz -> 660 Hz falling chime |
+| `SUPER + T` | **Read Selected Text (TTS)** | Global desktop | Synthesizes highlighted text (`wl-paste --primary`) via Kokoro ONNX |
+| `SUPER + T` *(while speaking)* | **Stop Active Speech** | Global desktop | Immediately halts active audio playback |
+| `voice --doctor` | **Pre-Flight Diagnostics** | Terminal | Inspects binaries, mic volume/mute, model weights, keybinds, and PIDs |
+| `voice --verify` | **3-Tier E2E Verification** | Terminal | Runs automated pipeline self-test (~3.3s) and interactive app matrix |
+| `voice --kill` | **Daemon Recovery** | Terminal | Terminates active background workers and purges stale PID locks |
+| `voice --status` | **Daemon Status Check** | Terminal | Reports active recording/transcribing/idle status and PID health |
 
-## Features
+---
 
-- `Super+B`: toggle recording, then transcribe and insert text into the focused application.
-- `Super+T`: speak selected text, with clipboard fallback.
-- `Super+T` while speaking: stop current TTS playback.
-- Local STT through `faster-whisper`.
-- Local Kokoro TTS by default.
-- Optional Microsoft Edge TTS backend for comparison.
-- Audible recording cues with no external sound assets.
-- Terminal monitor mode for background activity.
+## Prerequisites & Installation (Arch Linux + Hyprland)
 
-## Runtime Model
+### 1. System Packages
 
-The installed GNOME shortcuts call the same command:
-
-```text
-Super+B -> voicemode --toggle
-Super+T -> voicemode --speak-selection
-```
-
-For STT, `--toggle` starts a detached background recorder. The next toggle sends it a signal to stop recording, transcribe, and insert the recognized text.
-
-For TTS, `--speak-selection` reads the X11 primary selection with `xclip -selection primary -o`. This is the text most X11 applications expose immediately after a mouse highlight. If the primary selection is empty, voicemode reads the clipboard instead. It then synthesizes a temporary audio file and plays it with `ffplay`.
-
-Runtime state is stored under:
-
-```text
-$XDG_RUNTIME_DIR/voice-stt/
-```
-
-## Installation
-
-Install system packages:
+On **`dots-hyprland`** installations, Wayland clipboard utilities, notification daemons, and PipeWire are pre-installed. You only need to install two packages:
 
 ```bash
-sudo apt install ffmpeg xclip xdotool ydotool wl-clipboard libportaudio2 portaudio19-dev libnotify-bin wget
+sudo pacman -S wtype ffmpeg
 ```
 
-Install the Python package in editable mode:
+*(On a vanilla Arch Linux installation, install the full toolchain: `sudo pacman -S wtype ffmpeg wl-clipboard libnotify pipewire wireplumber`)*
+
+### 2. Python Virtual Environment (`uv`)
+
+Create an isolated virtual environment and install voicemode with Kokoro TTS dependencies:
 
 ```bash
-python3.11 -m pip install --user -e ".[kokoro]"
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e ".[kokoro]"
 ```
 
-Download Kokoro model assets:
+Symlink the command to your `~/.local/bin/` so it is available globally:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/.venv/bin/voice" ~/.local/bin/voice
+ln -sf "$(pwd)/.venv/bin/voicemode" ~/.local/bin/voicemode
+```
+
+### 3. Download Local Offline Model Assets
+
+Download Kokoro neural TTS weights (~338 MB total):
 
 ```bash
 scripts/download-kokoro-assets.sh
 ```
 
-Install GNOME hotkeys:
+Pre-cache Faster-Whisper `small.en` speech recognition weights (~480 MB):
 
 ```bash
-voicemode --install-hotkeys
+voice --check --allow-download
 ```
 
-The package also installs a `voice` command alias for compatibility with earlier local setup:
+### 4. Install Hyprland Keybindings (GNU Stow-Safe)
+
+Install the global hotkeys into your Hyprland configuration:
 
 ```bash
-voice --install-hotkeys
+voice --install-hotkey
 ```
 
-## Usage
+> **GNU Stow Note:** If your `~/.config/hypr/custom/keybinds.lua` is a symbolic link pointing to a dotfiles repository (e.g. `~/.dotfiles/stow/hypr/...`), voicemode resolves the real canonical path and modifies it in-place without breaking or unlinking your symlink.
 
-Start the monitor:
+---
+
+## Daily Workflows
+
+### 1. Push-to-Talk Speech Dictation
+
+1. Focus any window: Kitty terminal, Foot, Neovim, VS Code, or a browser input field.
+2. Press `SUPER + SHIFT + M`. You will hear a crisp high chime (880 Hz) indicating recording has begun. A subtle tick sounds every 5 seconds as a reminder.
+3. Speak your dictation naturally.
+4. Press `SUPER + SHIFT + M` again. A descending chime sounds as Faster-Whisper transcribes your voice on CPU (~1.8s) and types the text directly into the focused application via `wtype`.
+
+### 2. Neural Screen Reading (TTS)
+
+1. Highlight any paragraph or snippet of text on your screen with your mouse in Firefox, Chromium, Zathura, or a terminal.
+2. Press `SUPER + T`. Voicemode captures the Wayland primary selection (`wl-paste --primary`) and streams audio synthesized locally by Kokoro ONNX through `ffplay`.
+3. To stop speech at any time, press `SUPER + T` again.
+
+### 3. System Diagnostics & Recovery
+
+If audio devices are changed or a crash occurs:
 
 ```bash
-voicemode
+# Check all dependencies, audio devices, and models:
+voice --doctor
+
+# Kill any orphaned processes and clear stale lock files:
+voice --kill
+
+# Run the 3-tier self-test suite:
+voice --verify --tier 2
 ```
 
-Check STT backend loading:
+---
 
-```bash
-voicemode --check
-```
+## Key Configuration Options
 
-Check TTS configuration:
+You can customize behavior via CLI flags or environment variables:
 
-```bash
-voicemode --tts-check
-```
+| Setting | Flag | Environment Variable | Default |
+|---|---|---|---|
+| Typing delay | `--type-delay <ms>` | `VOICE_TYPE_DELAY` | `2` ms |
+| Pre-type settling delay | `--pre-type-delay <ms>` | `VOICE_PRE_TYPE_DELAY` | `50` ms |
+| Preserve newlines | `--keep-newlines` | `VOICE_KEEP_NEWLINES` | `false` (collapses to spaces) |
+| Audio cues | `--beep` / `--no-beep` | `VOICE_BEEP` | `true` |
+| Cue volume | `--beep-volume <0.0-1.0>` | `VOICEMODE_CUE_VOLUME` | `0.08` |
+| Whisper STT model | `--model <name>` | `VOICE_STT_MODEL` | `small.en` |
+| TTS speed multiplier | `--tts-speed <float>` | `VOICE_TTS_SPEED` | `1.2` (range: 0.5 - 2.0) |
+| Primary TTS voice | `--tts-voice <id>` | `VOICE_TTS_VOICE` | `af_heart` (secondary: `bm_george`) |
 
-List Kokoro voices:
+---
 
-```bash
-voicemode --list-tts-voices
-```
+## Privacy Guarantee
 
-Speak explicit text:
+- **Speech-to-Text:** 100% offline. Audio buffers are captured locally, transcribed via Faster-Whisper CTranslate2, and temporary audio files are unlinked immediately after insertion.
+- **Text-to-Speech:** Default Kokoro engine runs 100% locally via ONNX Runtime without network access.
+- *(Optional: Microsoft Edge TTS can be enabled via `--tts-backend edge`, which streams to Microsoft servers. It is disabled by default.)*
 
-```bash
-voicemode --speak "This is a local TTS test."
-```
-
-Speak selected text:
-
-```bash
-voicemode --speak-selection
-```
-
-Stop active TTS:
-
-```bash
-voicemode --stop-tts
-```
-
-## Default TTS Configuration
-
-The current default TTS backend is Kokoro:
-
-```text
-backend: kokoro
-voice: af_heart
-speed: 2x
-trim: false
-secondary voice: bm_george
-```
-
-Use George manually:
-
-```bash
-voicemode --speak-selection --tts-voice bm_george
-```
-
-Use Edge TTS manually:
-
-```bash
-voicemode --tts-backend edge --tts-voice en-GB-RyanNeural --speak-selection
-```
-
-## Configuration
-
-Common environment variables:
-
-```text
-VOICE_STT_MODEL=base
-VOICE_STT_DEVICE=auto
-VOICE_STT_COMPUTE_TYPE=auto
-VOICE_STT_LANGUAGE=
-VOICE_OUTPUT_METHOD=type
-VOICE_WAYLAND_BACKEND=auto
-VOICE_TYPE_DELAY=2
-VOICE_PRE_TYPE_DELAY=50
-VOICE_KEEP_NEWLINES=false
-VOICE_BEEP=true
-VOICE_RECORDING_BEEP_INTERVAL=5
-VOICE_TTS_BACKEND=kokoro
-VOICE_TTS_VOICE=af_heart
-VOICE_TTS_SPEED=2.0
-VOICE_KOKORO_MODEL=/path/to/kokoro-v1.0.onnx
-VOICE_KOKORO_VOICES=/path/to/voices-v1.0.bin
-VOICE_KOKORO_TRIM=false
-```
-
-### Key CLI Flags for Wayland Input Injection
-
-- `--wayland-backend`: `auto` (default, prefers `wtype` over `ydotool`), `wtype`, or `ydotool`.
-- `--type-delay`: Milliseconds between synthetic keystrokes for `--output-method type` (default: 2).
-- `--pre-type-delay`: Milliseconds to wait before keystroke injection starts to allow modifier key release (default: 50).
-- `--keep-newlines`: Preserve literal newlines in typed transcripts. Default behavior collapses internal newlines to spaces to prevent accidental Return dispatches.
-
-
-## Privacy
-
-STT is local when using the default faster-whisper path.
-
-Kokoro TTS is local once model assets are downloaded.
-
-Edge TTS is optional and sends text to Microsoft's online service through the `edge-tts` package. Do not use the Edge backend for private text unless that is acceptable.
-
-## Repository Layout
-
-```text
-voice.py                         main command implementation
-pyproject.toml                   package metadata and console scripts
-scripts/download-kokoro-assets.sh local model asset downloader
-docs/DEPENDENCIES.md             dependency and license notes
-models/                          ignored local model files
-samples/                         ignored generated audio samples
-```
+---
 
 ## License
 
-The repository source code is MIT licensed.
-
-Third-party packages, model weights, and system tools keep their own licenses. See `docs/DEPENDENCIES.md`.
-
-The current Kokoro test path uses `kokoro-onnx==0.5.0`, which pulls a GPLv3+ phonemizer dependency. That is acceptable for local evaluation, but it is not a clean permissive-only dependency chain. Before publishing binary packages or claiming a strict MIT-style dependency stack, replace or isolate that dependency path.
-
-The optional Edge backend is not an open local voice stack. The Python package is open source, but the service and voices are controlled by Microsoft.
+The repository source code is licensed under the [MIT License](LICENSE). Third-party packages and neural weights maintain their respective licenses; see [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
