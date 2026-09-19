@@ -1,31 +1,25 @@
 # voicemode
 
-Desktop-global speech-to-text and text-to-speech hotkeys for Linux.
+Desktop-global speech-to-text dictation and text-to-speech utility for Arch Linux running Hyprland.
 
-voicemode is a single Python command that runs local push-to-talk transcription and selected-text speech from GNOME global shortcuts. It was built for an X11 desktop where dictation should work in any focused application, including terminals.
+voicemode provides low-latency push-to-talk speech transcription typing directly into the active focused window (Kitty, Foot, Neovim, VS Code, browsers) and neural on-demand text-to-speech reading of highlighted screen text via Kokoro ONNX.
+
+- Dedicated Guide: [`docs/ARCH_HYPRLAND.md`](docs/ARCH_HYPRLAND.md)
+- Dependency Reference: [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 
 ## Current Status
 
-This project is usable on the development workstation, but it is not a polished cross-desktop package yet.
-
-Tested target:
+Fully tailored and validated for Arch Linux + Hyprland on Wayland:
 
 ```text
 OS: Arch Linux
 Compositor: Hyprland (Wayland)
-Python: 3.12
+Dotfiles: dots-hyprland (custom/keybinds.lua with GNU Stow preservation)
+Python: 3.12 (via uv venv)
 STT: faster-whisper (CPU int8)
-TTS default: Kokoro via kokoro-onnx
-Text insertion: wtype (primary, rootless) with ydotool fallback
+TTS: Kokoro via kokoro-onnx (offline ONNX runtime)
+Text injection: wtype (primary rootless Wayland virtual keyboard)
 Selection reading / Clipboard: wl-clipboard (wl-copy, wl-paste)
-```
-
-Known non-goals for the current version:
-
-```text
-Non-GNOME shortcut installation
-Bundled model weights
-Strict permissive-only TTS dependency chain
 ```
 
 ## Features
