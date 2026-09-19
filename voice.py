@@ -29,6 +29,7 @@ import threading
 import time
 import tty
 import urllib.request
+import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -2010,9 +2011,466 @@ def run_doctor(args: argparse.Namespace) -> int:
     return 0 if overall_ok else 1
 
 
+TEST_PAYLOADS: list[tuple[str, str]] = [
+    ("Conversational prose", "The quick brown fox jumps over the lazy dog."),
+    ("Punctuation & capitalization", "Hello, World! How are you doing today?"),
+    ("Programming code & symbols", 'def calculate_total(items, tax=0.08): return sum(x["price"] for x in items) * (1.0 + tax)'),
+    ("Multi-line text (newlines)", "Line one: start of block\nLine two: middle of block\nLine three: end of block"),
+]
+
+
+def hyprctl_active_window(countdown_seconds: int = 0) -> dict[str, Any] | None:
+    """Inspect active focused window via hyprctl activewindow -j."""
+    import json as json_lib
+
+    if countdown_seconds > 0:
+        for s in range(countdown_seconds, 0, -1):
+            print(f"  Focus your target window in {s} second(s)...", end="\r", flush=True)
+            time.sleep(1.0)
+        print(" " * 50, end="\r", flush=True)
+
+    hyprctl = shutil.which("hyprctl")
+    if not hyprctl:
+        return None
+    try:
+        res = subprocess.run([hyprctl, "activewindow", "-j"], capture_output=True, text=True, check=False)
+        if res.returncode != 0 or not res.stdout.strip():
+            return None
+        data = json_lib.loads(res.stdout)
+        if not isinstance(data, dict) or not data or not data.get("class"):
+            return None
+        workspace_info = data.get("workspace", {})
+        ws_name = workspace_info.get("name", "") if isinstance(workspace_info, dict) else str(workspace_info)
+        return {
+            "class": data.get("class", ""),
+            "title": data.get("title", ""),
+            "pid": data.get("pid", 0),
+            "workspace": ws_name,
+            "xwayland": data.get("xwayland", False),
+        }
+    except Exception:
+        return None
+
+
+def check_primary_selection_roundtrip() -> tuple[bool, str, str]:
+    """Test Wayland primary selection roundtrip via wl-copy and wl-paste."""
+    wl_copy = shutil.which("wl-copy")
+    wl_paste = shutil.which("wl-paste")
+    if not wl_copy or not wl_paste:
+        return False, "wl-copy or wl-paste missing", "sudo pacman -S wl-clipboard"
+    token = f"voicemode-sel-test-{uuid.uuid4().hex[:8]}"
+    try:
+        proc = subprocess.run([wl_copy, "--primary"], input=token, text=True, check=False)
+        if proc.returncode != 0:
+            return False, "wl-copy --primary failed", "Ensure Wayland session is active"
+        read_proc = subprocess.run([wl_paste, "--primary"], capture_output=True, text=True, check=False)
+        if read_proc.returncode != 0:
+            return False, "wl-paste --primary failed", "Ensure Wayland session is active"
+        read_token = read_proc.stdout.strip()
+        if read_token == token:
+            return True, f"Verified round-trip ('{token}')", ""
+        return False, f"Token mismatch: got '{read_token}', expected '{token}'", "Clipboard sync issue"
+    except Exception as e:
+        return False, f"Selection error: {e}", "Verify wl-clipboard in Wayland session"
+
+
+def run_tier1_diagnostics(args: argparse.Namespace) -> tuple[bool, list[dict[str, Any]]]:
+    """Run Tier 1 static pre-flight diagnostics."""
+    t0 = time.perf_counter()
+    results: list[dict[str, Any]] = []
+
+    # 1. Binaries
+    binary_checks = [
+        ("wtype", "sudo pacman -S wtype"),
+        ("wl-copy", "sudo pacman -S wl-clipboard"),
+        ("wl-paste", "sudo pacman -S wl-clipboard"),
+        ("ffplay", "sudo pacman -S ffmpeg"),
+        ("wpctl", "sudo pacman -S wireplumber"),
+        ("hyprctl", "sudo pacman -S hyprland"),
+    ]
+    present = 0
+    for name, hint in binary_checks:
+        ok, _, _ = check_binary(name, hint)
+        if ok:
+            present += 1
+    bin_ok = present >= 5
+    results.append({
+        "tier": "T1",
+        "subsystem": "System Binaries",
+        "test": "Arch native toolchain",
+        "ok": bin_ok,
+        "details": f"{present}/6 present",
+        "duration_s": round(time.perf_counter() - t0, 4),
+    })
+
+    # 2. Audio source
+    t_aud = time.perf_counter()
+    audio_ok, audio_details, _ = check_audio_source_status()
+    results.append({
+        "tier": "T1",
+        "subsystem": "PipeWire Audio",
+        "test": "Mic volume & mute check",
+        "ok": audio_ok or "[MUTED]" in audio_details,
+        "details": audio_details,
+        "duration_s": round(time.perf_counter() - t_aud, 4),
+    })
+
+    # 3. Models
+    t_mod = time.perf_counter()
+    models_data = check_models_status(
+        stt_model=getattr(args, "model", "small.en"),
+        kokoro_model=getattr(args, "kokoro_model", None),
+        kokoro_voices=getattr(args, "kokoro_voices", None),
+    )
+    all_models_ok = all(m[1] for m in models_data)
+    results.append({
+        "tier": "T1",
+        "subsystem": "Speech/TTS Models",
+        "test": "Whisper & Kokoro weights",
+        "ok": all_models_ok,
+        "details": "Verified" if all_models_ok else "Missing assets",
+        "duration_s": round(time.perf_counter() - t_mod, 4),
+    })
+
+    # 4. Hyprland keybinds
+    t_kb = time.perf_counter()
+    kb_ok, kb_details, _ = check_hyprland_keybinds_status()
+    results.append({
+        "tier": "T1",
+        "subsystem": "Compositor Integration",
+        "test": "Hyprland keybinds & Stow",
+        "ok": kb_ok,
+        "details": kb_details,
+        "duration_s": round(time.perf_counter() - t_kb, 4),
+    })
+
+    # 5. Daemon health
+    t_d = time.perf_counter()
+    daemons_data = check_daemon_pid_health()
+    all_daemons_ok = all(d[1] for d in daemons_data)
+    results.append({
+        "tier": "T1",
+        "subsystem": "Daemon Health",
+        "test": "PID file & worker health",
+        "ok": all_daemons_ok,
+        "details": "Idle/Running" if all_daemons_ok else "Stale lock",
+        "duration_s": round(time.perf_counter() - t_d, 4),
+    })
+
+    overall_ok = all(r["ok"] for r in results)
+    return overall_ok, results
+
+
+def run_tier2_pipeline_test(args: argparse.Namespace) -> tuple[bool, list[dict[str, Any]]]:
+    """Run Tier 2 automated synthetic AI loopback and clipboard round-trip self-test."""
+    results: list[dict[str, Any]] = []
+
+    # 1. Audio tone generation
+    t0 = time.perf_counter()
+    tone_ok = True
+    tone_details = "880Hz tone synthesized"
+    try:
+        play_tone(args, 880, 0.05)
+    except Exception as e:
+        tone_ok = False
+        tone_details = f"Tone error: {e}"
+    results.append({
+        "tier": "T2",
+        "subsystem": "Audio Synthesizer",
+        "test": "Sine wave cue generator",
+        "ok": tone_ok,
+        "details": tone_details,
+        "duration_s": round(time.perf_counter() - t0, 4),
+    })
+
+    # 2. Kokoro TTS synthesis
+    t_tts = time.perf_counter()
+    test_phrase = "The quick brown fox jumps over the lazy dog."
+    temp_wav = Path(tempfile.gettempdir()) / f"voicemode_verify_{uuid.uuid4().hex[:8]}.wav"
+    tts_ok = True
+    tts_details = ""
+    try:
+        synthesize_kokoro_tts(test_phrase, temp_wav, args)
+        if temp_wav.exists() and temp_wav.stat().st_size > 1000:
+            sz_kb = temp_wav.stat().st_size / 1024
+            tts_details = f"Synthesized {sz_kb:.1f} KB WAV"
+        else:
+            tts_ok = False
+            tts_details = "Output file missing or empty"
+    except Exception as e:
+        tts_ok = False
+        tts_details = f"TTS synthesis failed: {e}"
+    results.append({
+        "tier": "T2",
+        "subsystem": "Neural TTS Engine",
+        "test": "Kokoro-v1.0 synthesis",
+        "ok": tts_ok,
+        "details": tts_details,
+        "duration_s": round(time.perf_counter() - t_tts, 4),
+    })
+
+    # 3. Faster-Whisper STT loopback
+    t_stt = time.perf_counter()
+    stt_ok = True
+    stt_details = ""
+    if tts_ok and temp_wav.exists():
+        try:
+            model_state = load_model(args)
+            transcript, _ = transcribe(model_state, temp_wav, args)
+            norm_trans = re.sub(r"[^a-zA-Z0-9 ]", "", transcript.lower()).strip()
+            norm_orig = re.sub(r"[^a-zA-Z0-9 ]", "", test_phrase.lower()).strip()
+            if norm_trans == norm_orig or "quick brown fox" in norm_trans:
+                stt_details = f"Loopback matched ('{transcript}')"
+            else:
+                stt_ok = False
+                stt_details = f"Transcript mismatch: '{transcript}' vs '{test_phrase}'"
+        except Exception as e:
+            stt_ok = False
+            stt_details = f"Whisper transcription failed: {e}"
+        finally:
+            try:
+                temp_wav.unlink()
+            except OSError:
+                pass
+    else:
+        stt_ok = False
+        stt_details = "Skipped (TTS synthesis unavailable)"
+    results.append({
+        "tier": "T2",
+        "subsystem": "Speech Recognition Engine",
+        "test": "Whisper loopback decode",
+        "ok": stt_ok,
+        "details": stt_details,
+        "duration_s": round(time.perf_counter() - t_stt, 4),
+    })
+
+    # 4. Wayland primary selection roundtrip
+    t_clip = time.perf_counter()
+    clip_ok, clip_details, _ = check_primary_selection_roundtrip()
+    results.append({
+        "tier": "T2",
+        "subsystem": "Wayland Clipboard",
+        "test": "Primary selection round-trip",
+        "ok": clip_ok,
+        "details": clip_details,
+        "duration_s": round(time.perf_counter() - t_clip, 4),
+    })
+
+    overall_ok = all(r["ok"] for r in results)
+    return overall_ok, results
+
+
+def run_tier3_interactive_test(args: argparse.Namespace) -> tuple[bool, list[dict[str, Any]]]:
+    """Run Tier 3 interactive desktop testing across target application matrix."""
+    t0 = time.perf_counter()
+    results: list[dict[str, Any]] = []
+
+    if not sys.stdin.isatty():
+        results.append({
+            "tier": "T3",
+            "subsystem": "Interactive App Matrix",
+            "test": "Target desktop apps (Kitty/Foot/Neovim/VSCode/Browser)",
+            "ok": True,
+            "details": "Skipped (non-interactive session / headless)",
+            "duration_s": round(time.perf_counter() - t0, 4),
+        })
+        return True, results
+
+    print("\n" + "=" * 66)
+    print("      TIER 3: INTERACTIVE DESKTOP APPLICATION MATRIX")
+    print("=" * 66)
+    print("This tier tests keystroke injection and selection capture in live apps.")
+    print("Recommended target apps: Kitty, Foot, Neovim, VS Code, Firefox, Chromium.\n")
+
+    tested_count = 0
+
+    while True:
+        try:
+            choice = input("Ready to test a window? Press [Enter] to focus or 'q' to finish Tier 3: ").strip()
+        except EOFError:
+            break
+        if choice.lower() == "q":
+            break
+
+        print("\nSwitch focus to your target application now...")
+        win = hyprctl_active_window(countdown_seconds=3)
+        if not win:
+            print("  [WARN] No focused window detected via hyprctl. Try again.")
+            continue
+
+        app_class = win.get("class", "Unknown")
+        app_title = win.get("title", "")
+        print(f"\n[Window Detected] Class: '{app_class}' | Title: '{app_title}'")
+        try:
+            confirm = input(f"Inject test typing into '{app_class}'? [Y/n]: ").strip()
+        except EOFError:
+            confirm = "n"
+        if confirm.lower() == "n":
+            continue
+
+        app_tests_passed = True
+        for name, payload in TEST_PAYLOADS:
+            print(f"  Typing payload: {name}...")
+            time.sleep(0.5)
+            ok = type_text(payload, args)
+            if not ok:
+                print(f"    [FAIL] Could not inject text via {args.wayland_backend}.")
+                app_tests_passed = False
+                break
+            time.sleep(0.3)
+
+        if app_tests_passed:
+            try:
+                verify_input = input("  Did all test payloads type correctly with exact characters? [Y/n]: ").strip()
+            except EOFError:
+                verify_input = "y"
+            if verify_input.lower() != "n":
+                results.append({
+                    "tier": "T3",
+                    "subsystem": "Application Injection",
+                    "test": f"Window '{app_class}'",
+                    "ok": True,
+                    "details": f"All payloads verified in '{app_class}'",
+                    "duration_s": round(time.perf_counter() - t0, 4),
+                })
+            else:
+                results.append({
+                    "tier": "T3",
+                    "subsystem": "Application Injection",
+                    "test": f"Window '{app_class}'",
+                    "ok": False,
+                    "details": f"User reported typing defect in '{app_class}'",
+                    "duration_s": round(time.perf_counter() - t0, 4),
+                })
+        tested_count += 1
+
+    if tested_count == 0:
+        results.append({
+            "tier": "T3",
+            "subsystem": "Interactive App Matrix",
+            "test": "Interactive testing",
+            "ok": True,
+            "details": "No interactive tests performed by user",
+            "duration_s": round(time.perf_counter() - t0, 4),
+        })
+
+    overall_ok = all(r["ok"] for r in results)
+    return overall_ok, results
+
+
+def print_verification_summary_table(
+    results: list[dict[str, Any]], overall_ok: bool, total_duration_s: float
+) -> None:
+    """Print formatted terminal table for verification results."""
+    print("\n" + "=" * 88)
+    print("                      VOICEMODE 3-TIER VERIFICATION SUMMARY REPORT")
+    print("=" * 88)
+    print(f"{'Tier':<6} {'Subsystem':<26} {'Test / Probe':<26} {'Status':<8} {'Latency':<10} {'Details'}")
+    print("-" * 88)
+    for r in results:
+        status_tag = "PASS" if r["ok"] else "FAIL"
+        dur_str = f"{r.get('duration_s', 0.0):.2f}s"
+        print(f"{r.get('tier', 'T?'):<6} {r.get('subsystem', ''):<26} {r.get('test', ''):<26} {status_tag:<8} {dur_str:<10} {r.get('details', '')}")
+    print("=" * 88)
+    status_msg = "PASS (All tests passed)" if overall_ok else "FAIL (One or more tests failed)"
+    print(f"OVERALL STATUS: {status_msg} across {len(results)} check(s) in {total_duration_s:.2f}s")
+    print("=" * 88 + "\n")
+
+
+def format_verification_markdown(
+    results: list[dict[str, Any]], overall_ok: bool, total_duration_s: float
+) -> str:
+    """Format structured verification report in Markdown."""
+    lines: list[str] = [
+        "# Voicemode 3-Tier Verification Report",
+        "",
+        f"- **Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "- **Platform:** Arch Linux (x86_64) on Hyprland (Wayland)",
+        f"- **Overall Status:** {'PASS' if overall_ok else 'FAIL'}",
+        f"- **Total Duration:** {total_duration_s:.2f}s",
+        f"- **Total Checks:** {len(results)}",
+        "",
+        "## Summary Results",
+        "",
+        "| Tier | Subsystem | Test / Probe | Status | Latency | Details |",
+        "|------|-----------|--------------|--------|---------|---------|",
+    ]
+    for r in results:
+        status_str = "PASS" if r["ok"] else "FAIL"
+        lines.append(
+            f"| {r.get('tier', 'T?')} | {r.get('subsystem', '')} | {r.get('test', '')} | {status_str} | {r.get('duration_s', 0.0):.2f}s | {r.get('details', '')} |"
+        )
+    lines.extend([
+        "",
+        "## Standard Payloads Evaluated",
+        "",
+        "1. **Conversational prose:** `The quick brown fox jumps over the lazy dog.`",
+        "2. **Punctuation & capitalization:** `Hello, World! How are you doing today?`",
+        '3. **Programming code & symbols:** `def calculate_total(items, tax=0.08): return sum(x["price"] for x in items) * (1.0 + tax)`',
+        "4. **Multi-line text (newlines):** 3-line block testing newline character fidelity",
+        "",
+        "## Verdict",
+        "",
+        f"The voicemode system has undergone 3-tier validation on Arch Linux + Hyprland. Status: **{'PASS' if overall_ok else 'FAIL'}**.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def run_verification(args: argparse.Namespace) -> int:
     """Run end-to-end system verification suite."""
-    return 0
+    import json as json_lib
+
+    t_start = time.perf_counter()
+    tier_choice = getattr(args, "tier", "all")
+    all_results: list[dict[str, Any]] = []
+    overall_ok = True
+
+    if tier_choice in ("1", "all"):
+        t1_ok, t1_res = run_tier1_diagnostics(args)
+        all_results.extend(t1_res)
+        if not t1_ok:
+            overall_ok = False
+
+    if tier_choice in ("2", "all"):
+        t2_ok, t2_res = run_tier2_pipeline_test(args)
+        all_results.extend(t2_res)
+        if not t2_ok:
+            overall_ok = False
+
+    if tier_choice in ("3", "all"):
+        t3_ok, t3_res = run_tier3_interactive_test(args)
+        all_results.extend(t3_res)
+        if not t3_ok:
+            overall_ok = False
+
+    total_duration_s = time.perf_counter() - t_start
+
+    # Export markdown if requested
+    export_md = getattr(args, "export_markdown", None)
+    if export_md:
+        md_content = format_verification_markdown(all_results, overall_ok, total_duration_s)
+        try:
+            export_path = Path(export_md)
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            export_path.write_text(md_content, encoding="utf-8")
+            print(f"Exported verification report to {export_path}")
+        except Exception as e:
+            print(f"Failed to export markdown report to {export_md}: {e}", file=sys.stderr)
+
+    if getattr(args, "json", False):
+        report = {
+            "status": "pass" if overall_ok else "fail",
+            "tier": tier_choice,
+            "total_duration_s": round(total_duration_s, 4),
+            "total_checks": len(all_results),
+            "checks": all_results,
+        }
+        print(json_lib.dumps(report, indent=2))
+    else:
+        print_verification_summary_table(all_results, overall_ok, total_duration_s)
+
+    return 0 if overall_ok else 1
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

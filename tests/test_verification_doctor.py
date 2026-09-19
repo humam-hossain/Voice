@@ -296,5 +296,155 @@ class TestDaemonRecovery(unittest.TestCase):
                 self.assertIn("Daemon recovery complete", output)
 
 
+class TestCompositorInterrogation(unittest.TestCase):
+    """Test suite covering dynamic Hyprland compositor window interrogation."""
+
+    def test_hyprctl_active_window_success(self) -> None:
+        raw_json = json.dumps({
+            "class": "kitty",
+            "title": "terminal",
+            "pid": 12345,
+            "workspace": {"id": 1, "name": "1"},
+            "xwayland": False,
+        })
+        proc = MagicMock(returncode=0, stdout=raw_json)
+        with patch("shutil.which", return_value="/usr/bin/hyprctl"), \
+             patch("subprocess.run", return_value=proc):
+            data = voice.hyprctl_active_window(countdown_seconds=0)
+            self.assertIsNotNone(data)
+            assert data is not None
+            self.assertEqual(data["class"], "kitty")
+            self.assertEqual(data["title"], "terminal")
+            self.assertEqual(data["pid"], 12345)
+            self.assertEqual(data["workspace"], "1")
+            self.assertFalse(data["xwayland"])
+
+    def test_hyprctl_active_window_empty_or_no_client(self) -> None:
+        proc = MagicMock(returncode=0, stdout="{}")
+        with patch("shutil.which", return_value="/usr/bin/hyprctl"), \
+             patch("subprocess.run", return_value=proc):
+            data = voice.hyprctl_active_window(countdown_seconds=0)
+            self.assertIsNone(data)
+
+    def test_hyprctl_active_window_missing_hyprctl(self) -> None:
+        with patch("shutil.which", return_value=None):
+            data = voice.hyprctl_active_window(countdown_seconds=0)
+            self.assertIsNone(data)
+
+    def test_hyprctl_active_window_invalid_json(self) -> None:
+        proc = MagicMock(returncode=0, stdout="not valid json")
+        with patch("shutil.which", return_value="/usr/bin/hyprctl"), \
+             patch("subprocess.run", return_value=proc):
+            data = voice.hyprctl_active_window(countdown_seconds=0)
+            self.assertIsNone(data)
+
+
+class TestVerificationTiers(unittest.TestCase):
+    """Test suite covering 3-tier verification runner, payloads, and report exports."""
+
+    def test_payloads_matrix(self) -> None:
+        self.assertEqual(len(voice.TEST_PAYLOADS), 4)
+        names = [p[0] for p in voice.TEST_PAYLOADS]
+        self.assertIn("Conversational prose", names)
+        self.assertIn("Punctuation & capitalization", names)
+        self.assertIn("Programming code & symbols", names)
+        self.assertIn("Multi-line text (newlines)", names)
+
+        # Verify newline payload preservation
+        multiline = next(p[1] for p in voice.TEST_PAYLOADS if "newlines" in p[0])
+        self.assertIn("\n", multiline)
+        self.assertEqual(len(multiline.splitlines()), 3)
+
+    def test_check_primary_selection_roundtrip_success(self) -> None:
+        def fake_run(cmd, **kwargs):
+            if "--primary" in cmd and kwargs.get("input"):
+                token = kwargs["input"]
+                fake_run.saved_token = token
+                return MagicMock(returncode=0)
+            elif "--primary" in cmd and kwargs.get("capture_output"):
+                return MagicMock(returncode=0, stdout=fake_run.saved_token)
+            return MagicMock(returncode=1)
+
+        with patch("shutil.which", return_value="/usr/bin/wl-tool"), \
+             patch("subprocess.run", side_effect=fake_run):
+            ok, details, rem = voice.check_primary_selection_roundtrip()
+            self.assertTrue(ok)
+            self.assertIn("Verified round-trip", details)
+
+    def test_check_primary_selection_roundtrip_missing_tools(self) -> None:
+        with patch("shutil.which", return_value=None):
+            ok, details, rem = voice.check_primary_selection_roundtrip()
+            self.assertFalse(ok)
+            self.assertIn("missing", details)
+
+    def test_run_tier1_diagnostics(self) -> None:
+        args = argparse.Namespace(model="small.en", kokoro_model=None, kokoro_voices=None)
+        with patch("voice.check_binary", return_value=(True, "/usr/bin/x", "")), \
+             patch("voice.check_audio_source_status", return_value=(True, "Volume: 1.0 (Active)", "")), \
+             patch("voice.check_models_status", return_value=[("Model", True, "ok", "")]), \
+             patch("voice.check_hyprland_keybinds_status", return_value=(True, "Verified", "")), \
+             patch("voice.check_daemon_pid_health", return_value=[("STT", True, "Idle", "")]):
+            ok, results = voice.run_tier1_diagnostics(args)
+            self.assertTrue(ok)
+            self.assertEqual(len(results), 5)
+            self.assertTrue(all(r["tier"] == "T1" for r in results))
+
+    def test_run_tier2_pipeline_test(self) -> None:
+        args = argparse.Namespace(beep=False)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_wav = Path(tmp_dir) / "test.wav"
+            tmp_wav.write_bytes(b"RIFF" + b"\x00" * 2000)
+
+            def fake_synth(text, out_path, a):
+                out_path.write_bytes(b"RIFF" + b"\x00" * 2000)
+
+            with patch("voice.play_tone"), \
+                 patch("voice.synthesize_kokoro_tts", side_effect=fake_synth), \
+                 patch("voice.load_model", return_value=MagicMock()), \
+                 patch("voice.transcribe", return_value=("The quick brown fox jumps over the lazy dog.", MagicMock())), \
+                 patch("voice.check_primary_selection_roundtrip", return_value=(True, "Verified", "")):
+                ok, results = voice.run_tier2_pipeline_test(args)
+                self.assertTrue(ok)
+                self.assertEqual(len(results), 4)
+                self.assertTrue(all(r["tier"] == "T2" for r in results))
+                subsystems = [r["subsystem"] for r in results]
+                self.assertIn("Audio Synthesizer", subsystems)
+                self.assertIn("Neural TTS Engine", subsystems)
+                self.assertIn("Speech Recognition Engine", subsystems)
+                self.assertIn("Wayland Clipboard", subsystems)
+
+    def test_run_tier3_interactive_test_headless(self) -> None:
+        args = argparse.Namespace()
+        with patch("sys.stdin.isatty", return_value=False):
+            ok, results = voice.run_tier3_interactive_test(args)
+            self.assertTrue(ok)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["tier"], "T3")
+            self.assertIn("Skipped", results[0]["details"])
+
+    def test_run_verification_and_markdown_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            export_path = Path(tmp_dir) / "sub" / "report.md"
+            args = argparse.Namespace(
+                tier="1",
+                export_markdown=export_path,
+                json=False,
+                model="small.en",
+                kokoro_model=None,
+                kokoro_voices=None,
+            )
+            with patch("voice.run_tier1_diagnostics", return_value=(True, [
+                {"tier": "T1", "subsystem": "Binaries", "test": "Arch binaries", "ok": True, "details": "6/6", "duration_s": 0.01}
+            ])), patch("sys.stdout", new=io.StringIO()) as fake_stdout:
+                ret = voice.run_verification(args)
+                self.assertEqual(ret, 0)
+                self.assertTrue(export_path.exists())
+                content = export_path.read_text(encoding="utf-8")
+                self.assertIn("# Voicemode 3-Tier Verification Report", content)
+                self.assertIn("Arch Linux", content)
+                self.assertIn("| T1 | Binaries | Arch binaries | PASS |", content)
+                self.assertIn("OVERALL STATUS: PASS", fake_stdout.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
