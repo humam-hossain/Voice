@@ -22,10 +22,11 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 - ✓ Arch Linux Python environment setup via `uv` with Python 3.12 — Phase 1
 - ✓ Wayland keystroke injection support via `wtype` without root daemon — Phase 2
 - ✓ Kokoro model assets download, verification, and headless playback — Phase 3
+- ✓ Hyprland native Lua keybindings (`SUPER + SHIFT + M`, `SUPER + T`) with Stow symlink preservation — Phase 4
+- ✓ Daemon lifecycle hardening, double-tap race mitigation, signal differentiation, and focus-safe notifications — Phase 4
 
 ### Active
 
-- [ ] Hyprland shortcut configuration documentation and setup for `$mainMod+B` (STT toggle) and `$mainMod+T` (TTS selection)
 - [ ] End-to-end verification of STT dictation and TTS playback under Hyprland
 
 ### Out of Scope
@@ -56,7 +57,9 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 | Add `wtype` support for Wayland typing | Native Wayland tool already installed on system; does not require root permissions or `ydotoold` daemon | ✓ Validated in Phase 2 |
 | Kokoro ONNX offline TTS with atomic download and size guards | Prevent corruption from interrupted downloads and strictly enforce offline privacy without cloud fallback | ✓ Validated in Phase 3 |
 | Wayland primary selection read with 1.0s timeout | Prevent hangs if client deadlocks and read non-destructively without clobbering regular clipboard | ✓ Validated in Phase 3 |
-| Hyprland keybindings via `hyprland.conf` | User runs Hyprland; GNOME `gsettings` does not apply | — Pending (Phase 4) |
+| Hyprland Lua keybindings with Stow symlink preservation | User runs dots-hyprland; canonical path resolution writes to stow repo target without breaking symlinks | ✓ Validated in Phase 4 |
+| Atomic multi-token PID state tracking | Prevent double-tap race conditions and differentiate clean stop/transcribe (`SIGUSR1`) from abort (`SIGTERM`) | ✓ Validated in Phase 4 |
+| Focus-safe notification policy | Suppress routine STT toasts to prevent Wayland active window focus stealing before `wtype` typing | ✓ Validated in Phase 4 |
 | Default to CPU int8 for STT | Intel UHD Graphics 770; CPU int8 provides fast, stable inference without complex driver setup | ✓ Validated in Phase 1 |
 
 ## Evolution
@@ -77,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-19 after Phase 3*
+*Last updated: 2026-09-19 after Phase 4*
