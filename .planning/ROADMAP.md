@@ -14,7 +14,7 @@ Set up and optimize `voicemode` on Arch Linux under Hyprland (Wayland), deliveri
 - [x] **Phase 1: Environment & Audio Subsystem** - Setup Python 3.12 via `uv` and verify PortAudio/PipeWire audio capture (completed 2026-09-18)
 - [x] **Phase 2: Wayland Keystroke Injection** - Implement native `wtype` typing backend in `voice.py` (completed 2026-09-19)
 - [x] **Phase 3: Text-to-Speech & Model Asset Pipeline** - Download Kokoro ONNX assets and verify Wayland selection TTS (completed 2026-09-19)
-- [ ] **Phase 4: Hyprland Integration & Daemon Lifecycle** - Configure Hyprland shortcuts and verify background daemon toggle
+- [x] **Phase 4: Hyprland Integration & Daemon Lifecycle** - Configure Hyprland shortcuts and verify background daemon toggle (completed 2026-09-19)
 - [ ] **Phase 5: End-to-End System Verification** - Perform end-to-end validation across multiple application windows
 
 ## Phase Details
@@ -121,7 +121,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 04-02: Verify background recording daemon lifecycle and signal handling
+- [x] 04-02: Verify background recording daemon lifecycle and signal handling
 
 ### Phase 5: End-to-End System Verification
 
@@ -152,5 +152,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Environment & Audio Subsystem | 2/2 | Complete    | 2026-09-18 |
 | 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
 | 3. Text-to-Speech & Model Asset Pipeline | 2/2 | Complete    | 2026-09-19 |
-| 4. Hyprland Integration & Daemon Lifecycle | 2/2 | In Progress|  |
+| 4. Hyprland Integration & Daemon Lifecycle | 2/2 | Complete    | 2026-09-19 |
 | 5. End-to-End System Verification | 0/2 | Not started | - |

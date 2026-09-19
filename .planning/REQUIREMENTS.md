@@ -24,8 +24,8 @@ Requirements for initial release on Arch Linux + Hyprland. Each maps to roadmap 
 
 ### Hyprland Integration & Daemon Lifecycle
 
-- [ ] **HYPR-01**: Configure and document Hyprland shortcuts (`$mainMod+B` for STT toggle and `$mainMod+T` for TTS speak-selection) in `hyprland.conf`.
-- [ ] **HYPR-02**: Verify background daemon process management, PID file tracking, and signal handling (`SIGUSR1`) invoked from Hyprland keybindings.
+- [x] **HYPR-01**: Configure and document Hyprland shortcuts (`$mainMod+B` for STT toggle and `$mainMod+T` for TTS speak-selection) in `hyprland.conf`.
+- [x] **HYPR-02**: Verify background daemon process management, PID file tracking, and signal handling (`SIGUSR1`) invoked from Hyprland keybindings.
 
 ### End-to-End Verification
 
@@ -65,8 +65,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INPUT-02 | Phase 2 | Complete |
 | TTS-01 | Phase 3 | Complete |
 | TTS-02 | Phase 3 | Complete |
-| HYPR-01 | Phase 4 | Pending |
-| HYPR-02 | Phase 4 | Pending |
+| HYPR-01 | Phase 4 | Complete |
+| HYPR-02 | Phase 4 | Complete |
 | VERIF-01 | Phase 5 | Pending |
 | VERIF-02 | Phase 5 | Pending |
 
