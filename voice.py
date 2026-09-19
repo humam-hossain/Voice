@@ -556,34 +556,87 @@ def transcribe(model_state: ModelState, wav_path: Path, args: argparse.Namespace
         return text, cpu_state
 
 
-def notify(title: str, message: str, args: argparse.Namespace) -> None:
+def notify(
+    title: str,
+    message: str,
+    args: argparse.Namespace,
+    *,
+    urgency: str | None = None,
+    expire_time_ms: int | None = None,
+) -> None:
     if not getattr(args, "notify", True):
         return
     notify_send = shutil.which("notify-send")
     if not notify_send or (not os.getenv("DISPLAY") and not os.getenv("WAYLAND_DISPLAY")):
         return
-    subprocess.run([notify_send, title, message], check=False, stdin=subprocess.DEVNULL)
+
+    effective_urgency = urgency
+    effective_expire = expire_time_ms
+    if title == "Voice TTS" and effective_urgency is None:
+        effective_urgency = "low"
+    if title == "Voice TTS" and effective_expire is None:
+        effective_expire = 2000
+
+    cmd = [notify_send, title, message]
+    if effective_urgency and effective_urgency != "normal":
+        cmd.extend(["-u", effective_urgency])
+    if effective_expire is not None:
+        cmd.extend(["-t", str(effective_expire)])
+    subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
 
 
-def read_pid(path: Path = PID_FILE) -> Optional[int]:
+def read_pid_state(path: Path = PID_FILE) -> tuple[int | None, str]:
     try:
-        value = path.read_text(encoding="utf-8").strip()
-        return int(value) if value else None
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            return None, "idle"
+        parts = content.split()
+        if not parts:
+            return None, "idle"
+        pid = int(parts[0])
+        state = parts[1] if len(parts) > 1 else "recording"
+        return pid, state
     except (FileNotFoundError, ValueError, OSError):
-        return None
+        return None, "idle"
+
+
+def read_pid(path: Path = PID_FILE) -> int | None:
+    pid, _ = read_pid_state(path)
+    return pid
+
+
+def write_pid_state(pid: int, state: str, path: Path = PID_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{pid} {state}\n", encoding="utf-8")
+
+
+def write_pid(path: Path = PID_FILE) -> None:
+    write_pid_state(os.getpid(), "recording", path)
 
 
 def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        pass
+    except OSError:
+        return False
+
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    try:
+        raw = cmdline_path.read_bytes()
+        if not raw:
+            return False
+        cmdline = raw.decode("utf-8", errors="ignore").lower()
+        valid_tokens = ("voice", "python", "voicemode")
+        return any(tok in cmdline for tok in valid_tokens)
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return False
 
 
-def remove_pid(pid: Optional[int] = None, path: Path = PID_FILE) -> None:
+def remove_pid(pid: int | None = None, path: Path = PID_FILE) -> None:
     current = read_pid(path)
     if pid is not None and current not in (None, pid):
         return
@@ -593,9 +646,37 @@ def remove_pid(pid: Optional[int] = None, path: Path = PID_FILE) -> None:
         pass
 
 
-def write_pid(path: Path = PID_FILE) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+def cancel_active_stt() -> None:
+    pid, _ = read_pid_state(PID_FILE)
+    if pid and process_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+        remove_pid(pid)
+
+
+def max_recording_seconds() -> float:
+    try:
+        return float(os.getenv("VOICE_MAX_RECORDING_SECONDS", str(MAX_RECORDING_SECONDS)))
+    except ValueError:
+        return MAX_RECORDING_SECONDS
+
+
+def recording_beep_interval(args: argparse.Namespace) -> float:
+    try:
+        default_interval = getattr(args, "recording_beep_interval", 5.0)
+        return float(os.getenv("VOICE_RECORDING_BEEP_INTERVAL", str(default_interval)))
+    except ValueError:
+        return 5.0
+
+
+def transcription_watchdog_handler(pid: int) -> None:
+    print("voice STT transcription watchdog timed out after 60s. Aborting daemon.", file=sys.stderr, flush=True)
+    remove_pid(pid)
+    os._exit(1)
 
 
 def display_server() -> str:
@@ -1034,6 +1115,7 @@ def start_tts_background(text: str, args: argparse.Namespace, source: str = "tex
 
 def speak_selection(args: argparse.Namespace) -> int:
     cleanup_stale_tts_files()
+    cancel_active_stt()
     pid = read_pid(TTS_PID_FILE)
     if pid and process_alive(pid):
         stop_tts(args)
@@ -1251,18 +1333,39 @@ def background_argv(args: argparse.Namespace) -> list[str]:
 
 def toggle_background_recording(args: argparse.Namespace) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    pid = read_pid()
+    pid, state = read_pid_state()
     if pid and process_alive(pid):
-        os.kill(pid, signal.SIGUSR1)
-        print("Stopping voice recording...")
-        return 0
+        if state == "starting":
+            # Double-tap race mitigation (D-11): wait up to 300ms for child to transition to "recording"
+            deadline = time.monotonic() + 0.300
+            while time.monotonic() < deadline:
+                time.sleep(0.02)
+                pid, state = read_pid_state()
+                if not pid or not process_alive(pid):
+                    break
+                if state != "starting":
+                    break
+
+        if pid and process_alive(pid):
+            if state == "transcribing":
+                play_cue(args, "error")
+                print("Voice STT is currently transcribing and inserting text. Please wait...", file=sys.stderr)
+                return 0
+            if state == "recording":
+                os.kill(pid, signal.SIGUSR1)
+                print("Stopping voice recording...")
+                return 0
+
     if pid:
         remove_pid(pid)
+
+    # Symmetric mutual exclusion (D-14): silence TTS playback before starting STT
+    stop_tts(args, quiet=True)
 
     log = LOG_FILE.open("a", encoding="utf-8")
     log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start ---\n")
     log.flush()
-    subprocess.Popen(
+    proc = subprocess.Popen(
         background_argv(args),
         stdin=subprocess.DEVNULL,
         stdout=log,
@@ -1271,6 +1374,7 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
         close_fds=True,
     )
     log.close()
+    write_pid_state(proc.pid, "starting")
     print("Started voice recording. Run `voice --toggle` again to stop.")
     return 0
 
@@ -1280,57 +1384,78 @@ def run_background_recording(args: argparse.Namespace) -> int:
     sample_rate = resolve_sample_rate(input_device, args.sample_rate)
     recorder = Recorder(sample_rate=sample_rate, input_device=input_device)
     stop_requested = False
+    cancel_requested = False
     pid = os.getpid()
 
-    def request_stop(signum, frame) -> None:
+    def handle_usr1(signum, frame) -> None:
         nonlocal stop_requested
         stop_requested = True
 
-    signal.signal(signal.SIGUSR1, request_stop)
-    signal.signal(signal.SIGTERM, request_stop)
-    write_pid()
+    def handle_cancel(signum, frame) -> None:
+        nonlocal cancel_requested
+        cancel_requested = True
 
-    wav_path: Optional[Path] = None
+    signal.signal(signal.SIGUSR1, handle_usr1)
+    signal.signal(signal.SIGTERM, handle_cancel)
+    signal.signal(signal.SIGINT, handle_cancel)
+    write_pid_state(pid, "recording")
+
+    wav_path: Path | None = None
     should_delete = False
     try:
         play_cue(args, "start")
         recorder.start()
-        notify(APP_NAME, "Recording...", args)
+        # Routine "Recording..." toast suppressed per D-17 for focus safety
         print(f"Recording in background at {sample_rate} Hz. PID {pid}.", flush=True)
-        if args.beep and args.recording_beep_interval > 0:
-            print(f"Recording reminder cue every {args.recording_beep_interval:g}s.", flush=True)
+
+        beep_interval = recording_beep_interval(args)
+        ceiling = max_recording_seconds()
+        if args.beep and beep_interval > 0:
+            print(f"Recording reminder cue every {beep_interval:g}s.", flush=True)
         next_recording_cue = (
-            time.monotonic() + args.recording_beep_interval
-            if args.beep and args.recording_beep_interval > 0
+            time.monotonic() + beep_interval
+            if args.beep and beep_interval > 0
             else None
         )
 
-        while not stop_requested:
-            if recorder.started_at and (time.monotonic() - recorder.started_at) >= MAX_RECORDING_SECONDS:
+        while not stop_requested and not cancel_requested:
+            if recorder.started_at and (time.monotonic() - recorder.started_at) >= ceiling:
                 print(
-                    f"Safety ceiling: reached maximum duration ({int(MAX_RECORDING_SECONDS)}s). Stopping recording.",
+                    f"Safety ceiling: reached maximum duration ({int(ceiling)}s). Stopping recording.",
                     flush=True,
                 )
-                notify(APP_NAME, f"Max recording duration ({int(MAX_RECORDING_SECONDS)}s) reached. Transcribing...", args)
+                notify(APP_NAME, f"Max recording duration ({int(ceiling)}s) reached. Transcribing...", args)
                 break
             if next_recording_cue is not None and time.monotonic() >= next_recording_cue:
                 play_cue(args, "recording")
-                next_recording_cue = time.monotonic() + args.recording_beep_interval
+                next_recording_cue = time.monotonic() + beep_interval
             time.sleep(0.05)
 
+        if cancel_requested:
+            print("Recording cancelled by signal.", flush=True)
+            return 0
+
+        write_pid_state(pid, "transcribing")
         wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
         play_cue_async(args, "stop")
-        notify(APP_NAME, "Transcribing...", args)
+        # Routine "Transcribing..." toast suppressed per D-17
         print(f"Stopped ({duration:.1f}s). Transcribing {wav_path}...", flush=True)
 
-        model_state = load_model(args)
-        text, _ = transcribe(model_state, wav_path, args)
+        watchdog = threading.Timer(60.0, transcription_watchdog_handler, args=[pid])
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            model_state = load_model(args)
+            text, _ = transcribe(model_state, wav_path, args)
+        finally:
+            watchdog.cancel()
+
         print(text or "[no speech detected]", flush=True)
 
         if text and args.paste:
             if insert_text(text, args):
                 print("Transcript inserted.", flush=True)
-                notify(APP_NAME, "Transcript inserted.", args)
+                # Routine "Transcript inserted." toast suppressed per D-17
             else:
                 print("Transcript insert failed.", flush=True)
                 notify(APP_NAME, "Transcript insert failed; see log.", args)
@@ -1432,7 +1557,7 @@ def print_hyprland_keybinds() -> int:
     return 0
 
 
-def install_hyprland_keybinds(config_path: Optional[Path] = None) -> int:
+def install_hyprland_keybinds(config_path: Path | None = None) -> int:
     raw_path = config_path if config_path is not None else HYPRLAND_CUSTOM_KEYBINDS_PATH
     resolved_path = raw_path.resolve()
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1587,7 +1712,7 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
         return 0
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tts_defaults = load_hermes_tts_defaults()
     parser = argparse.ArgumentParser(description="Desktop-global STT and TTS voice command.")
     parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "small.en"))
@@ -1751,7 +1876,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--beep-output-device", default=os.getenv("VOICE_BEEP_OUTPUT_DEVICE"), help="Output device for cues.")
     parser.add_argument("--test-beep", action="store_true", help="Play start, reminder, and stop cues, then exit.")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.type_delay = max(0, args.type_delay)
     args.pre_type_delay = max(0, args.pre_type_delay)
     if not args.tts_voice:
