@@ -135,11 +135,11 @@ Plans:
   2. Selection-to-speech speaks highlighted text from web browser or document reader.
   3. Setup guide and troubleshooting notes for Arch Linux + Hyprland are documented.
 
-**Plans**: 2 plans
+**Plans**: 1/2 plans executed
 
 Plans:
 
-- [ ] 05-01-PLAN.md
+- [x] 05-01-PLAN.md
 - [ ] 05-02-PLAN.md
 
 **Wave 1**
@@ -161,4 +161,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
 | 3. Text-to-Speech & Model Asset Pipeline | 2/2 | Complete    | 2026-09-19 |
 | 4. Hyprland Integration & Daemon Lifecycle | 2/2 | Complete    | 2026-09-19 |
-| 5. End-to-End System Verification | 0/2 | Not started | - |
+| 5. End-to-End System Verification | 1/2 | In Progress|  |
