@@ -15,7 +15,7 @@ Set up and optimize `voicemode` on Arch Linux under Hyprland (Wayland), deliveri
 - [x] **Phase 2: Wayland Keystroke Injection** - Implement native `wtype` typing backend in `voice.py` (completed 2026-09-19)
 - [x] **Phase 3: Text-to-Speech & Model Asset Pipeline** - Download Kokoro ONNX assets and verify Wayland selection TTS (completed 2026-09-19)
 - [x] **Phase 4: Hyprland Integration & Daemon Lifecycle** - Configure Hyprland shortcuts and verify background daemon toggle (completed 2026-09-19)
-- [ ] **Phase 5: End-to-End System Verification** - Perform end-to-end validation across multiple application windows
+- [x] **Phase 5: End-to-End System Verification** - Perform end-to-end validation across multiple application windows (completed 2026-09-19)
 
 ## Phase Details
 
@@ -140,11 +140,11 @@ Plans:
 Plans:
 
 - [x] 05-01-PLAN.md
-- [ ] 05-02-PLAN.md
+- [x] 05-02-PLAN.md
 
 **Wave 1**
 
-- [ ] 05-01: System Diagnostics Engine (`voice --doctor`), 3-Tier Verification Engine (`voice --verify`, `scripts/verify-e2e.sh`), Dynamic Hyprland Window Interrogation, and Automated Unit/Integration Test Suite (`tests/test_verification_doctor.py`)
+- [x] 05-01: System Diagnostics Engine (`voice --doctor`), 3-Tier Verification Engine (`voice --verify`, `scripts/verify-e2e.sh`), Dynamic Hyprland Window Interrogation, and Automated Unit/Integration Test Suite (`tests/test_verification_doctor.py`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -161,4 +161,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Wayland Keystroke Injection | 2/2 | Complete    | 2026-09-19 |
 | 3. Text-to-Speech & Model Asset Pipeline | 2/2 | Complete    | 2026-09-19 |
 | 4. Hyprland Integration & Daemon Lifecycle | 2/2 | Complete    | 2026-09-19 |
-| 5. End-to-End System Verification | 1/2 | In Progress|  |
+| 5. End-to-End System Verification | 2/2 | Complete    | 2026-09-19 |

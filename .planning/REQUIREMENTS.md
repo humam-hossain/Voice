@@ -29,8 +29,8 @@ Requirements for initial release on Arch Linux + Hyprland. Each maps to roadmap 
 
 ### End-to-End Verification
 
-- [ ] **VERIF-01**: Successfully perform end-to-end voice dictation into active terminal and text editor windows under Hyprland.
-- [ ] **VERIF-02**: Successfully perform end-to-end text-to-speech reading and stop-playback of highlighted screen text under Hyprland.
+- [x] **VERIF-01**: Successfully perform end-to-end voice dictation into active terminal and text editor windows under Hyprland.
+- [x] **VERIF-02**: Successfully perform end-to-end text-to-speech reading and stop-playback of highlighted screen text under Hyprland.
 
 ## v2 Requirements
 
@@ -67,8 +67,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TTS-02 | Phase 3 | Complete |
 | HYPR-01 | Phase 4 | Complete |
 | HYPR-02 | Phase 4 | Complete |
-| VERIF-01 | Phase 5 | Pending |
-| VERIF-02 | Phase 5 | Pending |
+| VERIF-01 | Phase 5 | Complete |
+| VERIF-02 | Phase 5 | Complete |
 
 **Coverage:**
 
