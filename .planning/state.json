@@ -21,7 +21,7 @@
     {
       "number": "4",
       "name": "Hyprland Integration & Daemon Lifecycle",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "5",
@@ -32,7 +32,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 04 of 5 · 40% · executing"
+    "reason": "Phase 04 of 5 · 70% · executing"
   },
-  "updated_at": "2026-09-19T02:43:03.585Z"
+  "updated_at": "2026-09-19T02:50:01.661Z"
 }
