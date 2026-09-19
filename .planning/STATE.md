@@ -10,20 +10,20 @@ last_activity_desc: Phase 04 complete, transitioned to Phase 5
 state_head: 93d0943f70f07ac68e3aa148e1c6d901e86b80b9
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 4
   total_plans: 8
   completed_plans: 8
-  percent: 40
+  percent: 80
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-18)
+See: .planning/PROJECT.md (updated 2026-09-19)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Phase 04 — Hyprland Integration & Daemon Lifecycle
+**Current focus:** Phase 5 — End-to-End System Verification
 
 ## Current Position
 
@@ -32,7 +32,7 @@ Plan: Not started
 Status: Ready to plan
 Last activity: 2026-09-19 — Phase 04 complete, transitioned to Phase 5
 
-Progress: [████░░░░░░] 40%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -65,10 +65,12 @@ Progress: [████░░░░░░] 40%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Init]: Use `uv` with Python 3.12 for binary wheel compatibility with `faster-whisper` and `onnxruntime` on Arch Linux
-- [Init]: Add `wtype` for native Wayland keystroke simulation without root `ydotoold` daemon
-- [Init]: Configure Hyprland shortcuts in `hyprland.conf` instead of GNOME `gsettings`
-- [Init]: Default to CPU `int8` quantization for Whisper STT
+- [Phase 4]: Hyprland native Lua keybindings (SUPER + SHIFT + M, SUPER + T) with GNU Stow symlink preservation
+- [Phase 4]: Multi-token atomic PID state tracking (starting -> recording -> transcribing -> idle) in recorder.pid
+- [Phase 4]: Suppress routine STT dictation toasts to prevent Wayland active window focus stealing before wtype typing
+- [Phase 3]: Offline Kokoro TTS asset pipeline with atomic download, size guards, and selection reading
+- [Phase 2]: Wayland keystroke injection via wtype without root daemon
+- [Phase 1]: uv virtual environment with Python 3.12 for AI runtime compatibility
 
 ### Pending Todos
 
@@ -88,6 +90,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-19T02:04:17.642Z
+Last session: 2026-09-19
 Stopped at: Phase 04 complete, ready to plan Phase 5
-Resume file: .planning/phases/04-hyprland-integration-daemon-lifecycle/04-CONTEXT.md
+Resume file: None
