@@ -9,18 +9,18 @@ requires:
     plan: "01"
     provides: Hyprland keybinding shortcuts and dotfiles integration
 provides:
-  - Atomic PID lifecycle state tracking in `recorder.pid` (`starting` -> `recording` -> `transcribing` -> `idle`)
-  - Double-tap startup race mitigation with 300ms child readiness polling
-  - Busy state protection emitting dual-tone error chime when invoked during transcription or text typing
-  - Clean signal differentiation: `SIGUSR1` initiates stop and transcribe; `SIGTERM`/`SIGINT` aborts immediately and cleans up without typing
-  - Symmetric STT/TTS mutual exclusion to prevent audio bleed and device contention in both directions
-  - Hardened process aliveness check verifying `/proc/<pid>/cmdline` against PID recycling
-  - 60-second transcription watchdog preventing zombie daemon state if inference or typing stalls
-  - Dynamic recording ceiling (`VOICE_MAX_RECORDING_SECONDS`) defaulting to 300s
-  - Periodic reminder cue tick interval (`VOICE_RECORDING_BEEP_INTERVAL`) defaulting to 5.0s
-  - Focus-safe desktop notification policy suppressing routine STT toasts to prevent Wayland keystroke disruption
-  - Low-urgency quick auto-dismiss configuration for TTS toasts (`-u low -t 2000`)
-  - Full unit test coverage in `tests/test_hyprland_daemon.py`
+  - "Atomic PID lifecycle state tracking in `recorder.pid` (`starting` -> `recording` -> `transcribing` -> `idle`)"
+  - "Double-tap startup race mitigation with 300ms child readiness polling"
+  - "Busy state protection emitting dual-tone error chime when invoked during transcription or text typing"
+  - "Clean signal differentiation: `SIGUSR1` initiates stop and transcribe; `SIGTERM`/`SIGINT` aborts immediately and cleans up without typing"
+  - "Symmetric STT/TTS mutual exclusion to prevent audio bleed and device contention in both directions"
+  - "Hardened process aliveness check verifying `/proc/<pid>/cmdline` against PID recycling"
+  - "60-second transcription watchdog preventing zombie daemon state if inference or typing stalls"
+  - "Dynamic recording ceiling (`VOICE_MAX_RECORDING_SECONDS`) defaulting to 300s"
+  - "Periodic reminder cue tick interval (`VOICE_RECORDING_BEEP_INTERVAL`) defaulting to 5.0s"
+  - "Focus-safe desktop notification policy suppressing routine STT toasts to prevent Wayland keystroke disruption"
+  - "Low-urgency quick auto-dismiss configuration for TTS toasts (`-u low -t 2000`)"
+  - "Full unit test coverage in `tests/test_hyprland_daemon.py`"
 affects: [05-system-verification]
 
 actuals:
@@ -145,6 +145,7 @@ coverage:
         ref: "tests/test_hyprland_daemon.py#TestDesktopNotificationBehavior.test_tts_notification_urgency_and_timeout"
         status: pass
     human_judgment: false
+---
 
 ## Self-Check: PASSED
 - `tests/test_hyprland_daemon.py` passes all 22 tests.

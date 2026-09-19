@@ -9,8 +9,8 @@ requires:
     plan: "01"
     provides: System diagnostic engine (voice --doctor), daemon recovery (voice --kill), and 3-tier verification suite
 provides:
-  - Comprehensive user-facing documentation overhaul positioning Arch Linux + Hyprland as first-class in `README.md`
-  - "At a Glance" cheat-sheet table detailing shortcuts, chime audio cues, and maintenance commands
+  - "Comprehensive user-facing documentation overhaul positioning Arch Linux + Hyprland as first-class in `README.md`"
+  - "'At a Glance' cheat-sheet table detailing shortcuts, chime audio cues, and maintenance commands"
   - Architectural and operational guide in `docs/ARCH_HYPRLAND.md` covering dots-hyprland integration, GNU Stow symlink preservation, WirePlumber audio tuning via `wpctl`, and Kokoro offline TTS
   - Dependency and licensing specification in `docs/DEPENDENCIES.md` framing dots-hyprland defaults first
   - End-to-end operational verification on live Arch Linux + Hyprland workstation recorded in `05-VERIFICATION.md`
@@ -100,6 +100,7 @@ coverage:
         ref: "README.md#4-install-hyprland-keybindings-gnu-stow-safe"
         status: pass
     human_judgment: false
+---
 
 ## Self-Check: PASSED
 - `README.md` features Arch Linux + Hyprland as first-class desktop.

@@ -139,6 +139,7 @@ coverage:
         ref: "tests/test_verification_doctor.py#TestDaemonRecovery.test_kill_all_daemons_active_and_stale"
         status: pass
     human_judgment: false
+---
 
 ## Self-Check: PASSED
 - `tests/test_verification_doctor.py` passes all 30 tests.

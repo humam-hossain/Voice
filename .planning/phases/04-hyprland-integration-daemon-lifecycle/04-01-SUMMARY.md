@@ -118,6 +118,7 @@ coverage:
         ref: "tests/test_hyprland_daemon.py#TestHyprlandKeybindInstallation.test_install_hyprland_reloads_hyprctl"
         status: pass
     human_judgment: false
+---
 
 ## Self-Check: PASSED
 - `tests/test_hyprland_daemon.py` exists on disk and executes cleanly.

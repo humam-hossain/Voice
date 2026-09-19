@@ -135,7 +135,7 @@ Plans:
   2. Selection-to-speech speaks highlighted text from web browser or document reader.
   3. Setup guide and troubleshooting notes for Arch Linux + Hyprland are documented.
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 Plans:
 
@@ -148,7 +148,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05-02: Arch Linux & Hyprland Documentation Overhaul (`README.md`, `docs/ARCH_HYPRLAND.md`, `docs/DEPENDENCIES.md`), Cheatsheet Table, Stow Symlink Preservation Guide, and End-to-End Operational Verification
+- [x] 05-02: Arch Linux & Hyprland Documentation Overhaul (`README.md`, `docs/ARCH_HYPRLAND.md`, `docs/DEPENDENCIES.md`), Cheatsheet Table, Stow Symlink Preservation Guide, and End-to-End Operational Verification
 
 ## Progress
 
