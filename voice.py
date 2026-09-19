@@ -1535,8 +1535,12 @@ def generate_hyprland_block() -> str:
     return (
         "-- voicemode start\n"
         'hl.unbind("SUPER + T")\n'
-        'hl.bind("SUPER + SHIFT + M", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), { description = "Voice STT: Push-to-talk toggle" })\n'
-        'hl.bind("SUPER + T", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), { description = "Voice TTS: Speak selection" })\n'
+        'hl.bind("SUPER + SHIFT + M", '
+        'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
+        '{ description = "Voice STT: Push-to-talk toggle" })\n'
+        'hl.bind("SUPER + T", '
+        'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), '
+        '{ description = "Voice TTS: Speak selection" })\n'
         "-- voicemode end\n"
     )
 
@@ -1546,9 +1550,7 @@ def is_hyprland_session() -> bool:
         return True
     if os.getenv("XDG_CURRENT_DESKTOP") == "Hyprland":
         return True
-    if shutil.which("hyprctl") and os.getenv("WAYLAND_DISPLAY"):
-        return True
-    return False
+    return bool(shutil.which("hyprctl") and os.getenv("WAYLAND_DISPLAY"))
 
 
 def print_hyprland_keybinds() -> int:

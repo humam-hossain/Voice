@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import os
-import shutil
 import subprocess
 import tempfile
 import time
@@ -24,11 +23,15 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
         self.assertIn("-- voicemode end", block)
         self.assertIn('hl.unbind("SUPER + T")', block)
         self.assertIn(
-            'hl.bind("SUPER + SHIFT + M", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), { description = "Voice STT: Push-to-talk toggle" })',
+            'hl.bind("SUPER + SHIFT + M", '
+            'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
+            '{ description = "Voice STT: Push-to-talk toggle" })',
             block,
         )
         self.assertIn(
-            'hl.bind("SUPER + T", hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), { description = "Voice TTS: Speak selection" })',
+            'hl.bind("SUPER + T", '
+            'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), '
+            '{ description = "Voice TTS: Speak selection" })',
             block,
         )
         self.assertIn('HOME .. "/.local/bin/voice', block)
@@ -305,7 +308,6 @@ class TestDaemonLifecycleStates(unittest.TestCase):
             mock_stop_tts.assert_called_once_with(args, quiet=True)
 
     def test_symmetric_mutex_tts_stops_stt(self) -> None:
-        args = voice.parse_args([])
         stt_pid = 7777
         with patch("voice.read_pid_state", return_value=(stt_pid, "recording")), \
              patch("voice.process_alive", return_value=True), \
