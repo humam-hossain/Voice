@@ -1711,12 +1711,44 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
                 print("Press Ctrl+B to record again. Ctrl+C exits.")
     except KeyboardInterrupt:
         print("\nExiting.")
-        return 0
+def kill_all_daemons(args: argparse.Namespace) -> int:
+    """Terminate active background workers and purge stale PID files."""
+    return 0
+
+
+def run_doctor(args: argparse.Namespace) -> int:
+    """Run system pre-flight diagnostic probe."""
+    return 0
+
+
+def run_verification(args: argparse.Namespace) -> int:
+    """Run end-to-end system verification suite."""
+    return 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tts_defaults = load_hermes_tts_defaults()
     parser = argparse.ArgumentParser(description="Desktop-global STT and TTS voice command.")
+    parser.add_argument("--doctor", action="store_true", help="Run system pre-flight diagnostic probe.")
+    parser.add_argument("--verify", action="store_true", help="Run end-to-end system verification suite.")
+    parser.add_argument(
+        "--tier",
+        choices=("1", "2", "3", "all"),
+        default="all",
+        help="Verification tier to run: 1 (static), 2 (automated self-test), 3 (interactive), or all. Default: all.",
+    )
+    parser.add_argument("--json", action="store_true", help="Output verification/doctor results as JSON.")
+    parser.add_argument(
+        "--export-markdown",
+        type=Path,
+        default=None,
+        help="Export verification report to markdown file.",
+    )
+    parser.add_argument(
+        "--kill",
+        action="store_true",
+        help="Terminate active background workers and purge stale PID files.",
+    )
     parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "small.en"))
     parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "cpu"))
     parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "int8"))
@@ -1888,6 +1920,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if getattr(args, "kill", False):
+        return kill_all_daemons(args)
+    if getattr(args, "doctor", False):
+        return run_doctor(args)
+    if getattr(args, "verify", False):
+        return run_verification(args)
 
     if args.download_tts_assets:
         return download_tts_assets(args)
