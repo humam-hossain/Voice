@@ -1177,7 +1177,7 @@ def run_tts_background(args: argparse.Namespace) -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGUSR1, request_stop)
-    write_pid(TTS_PID_FILE)
+    write_pid_state(pid, "speaking", TTS_PID_FILE)
 
     try:
         text = text_file.read_text(encoding="utf-8").strip()
@@ -1453,6 +1453,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         print(text or "[no speech detected]", flush=True)
 
         if text and args.paste:
+            write_pid_state(pid, "typing")
             if insert_text(text, args):
                 print("Transcript inserted.", flush=True)
                 # Routine "Transcript inserted." toast suppressed per D-17
