@@ -28,6 +28,7 @@ import termios
 import threading
 import time
 import tty
+import traceback
 import urllib.request
 import uuid
 import wave
@@ -87,6 +88,19 @@ class ModelState:
     model: WhisperModel
     requested_device: str
     requested_compute_type: str
+
+
+class STTStageFailure(Exception):
+    def __init__(
+        self,
+        stage: str,
+        error: Exception,
+        previous_failures: tuple[tuple[str, Exception], ...] = (),
+    ) -> None:
+        super().__init__(str(error))
+        self.stage = stage
+        self.error = error
+        self.previous_failures = previous_failures
 
 
 @dataclass
@@ -550,8 +564,15 @@ def transcribe(model_state: ModelState, wav_path: Path, args: argparse.Namespace
         if model_state.requested_device == "cpu":
             raise
         print(f"GPU/auto transcription failed ({exc}); retrying on CPU int8...", flush=True)
-        cpu_state = load_model(args, force_cpu=True)
-        segments, info = cpu_state.model.transcribe(str(wav_path), **kwargs)
+        previous_failures = (("GPU/auto transcription", exc),)
+        try:
+            cpu_state = load_model(args, force_cpu=True)
+        except Exception as fallback_error:
+            raise STTStageFailure("CPU fallback model loading", fallback_error, previous_failures) from fallback_error
+        try:
+            segments, info = cpu_state.model.transcribe(str(wav_path), **kwargs)
+        except Exception as fallback_error:
+            raise STTStageFailure("CPU fallback transcription", fallback_error, previous_failures) from fallback_error
         text = " ".join(segment.text.strip() for segment in segments).strip()
         return text, cpu_state
 
@@ -583,6 +604,80 @@ def notify(
     if effective_expire is not None:
         cmd.extend(["-t", str(effective_expire)])
     subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
+
+
+def report_stt_failure(
+    stage: str,
+    error: Exception,
+    args: argparse.Namespace,
+    *,
+    previous_failures: tuple[tuple[str, Exception], ...] = (),
+) -> None:
+    """Log full STT failure context and show a bounded notification without input contents."""
+    if stage.startswith("CPU fallback"):
+        device = "cpu"
+        requested_compute_type = getattr(args, "compute_type", "auto")
+        compute_type = "int8" if requested_compute_type == "auto" else requested_compute_type
+    else:
+        device = getattr(args, "device", "unknown")
+        compute_type = getattr(args, "compute_type", "unknown")
+
+    context = (
+        f"model={getattr(args, 'model', 'unknown')!r} device={device} compute_type={compute_type} "
+        f"allow_download={bool(getattr(args, 'allow_download', False))}"
+    )
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_lines = [f"\n--- STT failure ({timestamp}) ---", f"stage: {stage}", f"context: {context}"]
+    for previous_stage, previous_error in previous_failures:
+        previous_traceback = "".join(
+            traceback.format_exception(type(previous_error), previous_error, previous_error.__traceback__)
+        ).rstrip()
+        log_lines.extend(
+            [
+                f"previous failure: {previous_stage}: {type(previous_error).__name__}: {previous_error}",
+                "previous traceback:",
+                previous_traceback,
+            ]
+        )
+    error_traceback = "".join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip()
+    log_lines.extend(
+        [
+            f"error: {type(error).__name__}: {error}",
+            "traceback:",
+            error_traceback,
+        ]
+    )
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a", encoding="utf-8") as log:
+            log.write("\n".join(log_lines) + "\n")
+    except OSError as log_error:
+        print(
+            f"Could not append STT diagnostics to {LOG_FILE}: {type(log_error).__name__}: {log_error}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    raw_summary = f"{type(error).__name__}: {error}"
+    summary = " ".join(raw_summary.split())
+    model_name = " ".join(str(getattr(args, "model", "unknown")).split())[:48]
+    prefix = f"STT failed during {stage} ({model_name}): "
+    log_pointer = " ".join(str(LOG_FILE).split())
+    if len(log_pointer) > 100:
+        log_pointer = f"…{log_pointer[-99:]}"
+    suffix = f" Log: {log_pointer}"
+    max_message_length = 240
+    available = max(0, max_message_length - len(prefix) - len(suffix))
+    if len(summary) > available:
+        summary = summary[: max(0, available - 1)].rstrip() + "…"
+    try:
+        notify(APP_NAME, f"{prefix}{summary}{suffix}", args, urgency="critical")
+    except Exception as notify_error:
+        print(
+            f"Could not show STT failure notification: {type(notify_error).__name__}: {notify_error}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def read_pid_state(path: Path = PID_FILE) -> tuple[int | None, str]:
@@ -860,30 +955,50 @@ def paste_clipboard(text: str, args: argparse.Namespace, shortcut: str = "ctrl+v
         return False
 
 
-def insert_text(text: str, args: argparse.Namespace) -> bool:
+def insert_text(text: str, args: argparse.Namespace, *, raise_errors: bool = False) -> bool:
     if not text or not text.strip():
         return False
 
-    # Dual behavior (D-16): Unconditionally buffer transcript in clipboard first
-    copy_to_clipboard(text)
-
-    if not args.paste:
-        return False
-
     try:
+        # Dual behavior (D-16): Unconditionally buffer transcript in clipboard first
+        clipboard_copied = copy_to_clipboard(text)
+
+        if not args.paste:
+            return False
+
         if args.output_method == "type":
             success = type_text(text, args)
+            if not success and raise_errors:
+                raise RuntimeError(
+                    f"type output failed in {display_server()} session (backend unavailable or command failed)"
+                )
             if not success:
                 notify(APP_NAME, "Typing failed; transcript preserved in clipboard.", args)
             return success
         if args.output_method == "paste":
-            return paste_clipboard(text, args, "ctrl+v")
+            success = paste_clipboard(text, args, "ctrl+v")
+            if not success and raise_errors:
+                raise RuntimeError(
+                    f"paste output failed in {display_server()} session (clipboard or key backend failed)"
+                )
+            return success
         if args.output_method == "terminal-paste":
-            return paste_clipboard(text, args, "ctrl+shift+v")
+            success = paste_clipboard(text, args, "ctrl+shift+v")
+            if not success and raise_errors:
+                raise RuntimeError(
+                    f"terminal-paste output failed in {display_server()} session (clipboard or key backend failed)"
+                )
+            return success
         if args.output_method == "clipboard":
+            if not clipboard_copied:
+                if raise_errors:
+                    raise RuntimeError("clipboard output failed (no supported clipboard command succeeded)")
+                return False
             return True
         raise ValueError(f"unknown output method: {args.output_method}")
     except Exception as exc:
+        if raise_errors:
+            raise
         notify(APP_NAME, f"Could not insert transcript: {exc}", args)
         return False
 
@@ -1380,12 +1495,11 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
 
 
 def run_background_recording(args: argparse.Namespace) -> int:
-    input_device = parse_device(args.input_device)
-    sample_rate = resolve_sample_rate(input_device, args.sample_rate)
-    recorder = Recorder(sample_rate=sample_rate, input_device=input_device)
     stop_requested = False
     cancel_requested = False
     pid = os.getpid()
+    recorder: Recorder | None = None
+    active_stage = "microphone setup"
 
     def handle_usr1(signum, frame) -> None:
         nonlocal stop_requested
@@ -1395,15 +1509,19 @@ def run_background_recording(args: argparse.Namespace) -> int:
         nonlocal cancel_requested
         cancel_requested = True
 
-    signal.signal(signal.SIGUSR1, handle_usr1)
-    signal.signal(signal.SIGTERM, handle_cancel)
-    signal.signal(signal.SIGINT, handle_cancel)
-    write_pid_state(pid, "recording")
-
     wav_path: Path | None = None
     should_delete = False
     try:
+        input_device = parse_device(args.input_device)
+        sample_rate = resolve_sample_rate(input_device, args.sample_rate)
+        recorder = Recorder(sample_rate=sample_rate, input_device=input_device)
+        signal.signal(signal.SIGUSR1, handle_usr1)
+        signal.signal(signal.SIGTERM, handle_cancel)
+        signal.signal(signal.SIGINT, handle_cancel)
+        write_pid_state(pid, "recording")
+
         play_cue(args, "start")
+        active_stage = "recording/capture"
         recorder.start()
         # Routine "Recording..." toast suppressed per D-17 for focus safety
         print(f"Recording in background at {sample_rate} Hz. PID {pid}.", flush=True)
@@ -1436,42 +1554,52 @@ def run_background_recording(args: argparse.Namespace) -> int:
             return 0
 
         write_pid_state(pid, "transcribing")
+        active_stage = "WAV finalization"
         wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
         play_cue_async(args, "stop")
         # Routine "Transcribing..." toast suppressed per D-17
         print(f"Stopped ({duration:.1f}s). Transcribing {wav_path}...", flush=True)
 
+        active_stage = "transcription setup"
         watchdog = threading.Timer(60.0, transcription_watchdog_handler, args=[pid])
         watchdog.daemon = True
         watchdog.start()
         try:
+            active_stage = "Whisper model loading"
             model_state = load_model(args)
+            active_stage = "Whisper transcription"
             text, _ = transcribe(model_state, wav_path, args)
         finally:
             watchdog.cancel()
 
+        active_stage = "STT result handling"
         print(text or "[no speech detected]", flush=True)
 
         if text and args.paste:
+            active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
-            if insert_text(text, args):
+            if insert_text(text, args, raise_errors=True):
                 print("Transcript inserted.", flush=True)
                 # Routine "Transcript inserted." toast suppressed per D-17
             else:
-                print("Transcript insert failed.", flush=True)
-                notify(APP_NAME, "Transcript insert failed; see log.", args)
+                raise RuntimeError("transcript insertion returned an unsuccessful result")
         elif text:
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:
             notify(APP_NAME, "No speech detected.", args)
         return 0
+    except STTStageFailure as exc:
+        play_cue(args, "error")
+        report_stt_failure(exc.stage, exc.error, args, previous_failures=exc.previous_failures)
+        print(f"voice background error during {exc.stage}: {type(exc.error).__name__}", file=sys.stderr, flush=True)
+        return 1
     except Exception as exc:
         play_cue(args, "error")
-        notify(APP_NAME, str(exc), args)
-        print(f"voice background error: {exc}", file=sys.stderr, flush=True)
+        report_stt_failure(active_stage, exc, args)
+        print(f"voice background error during {active_stage}: {type(exc).__name__}", file=sys.stderr, flush=True)
         return 1
     finally:
-        if recorder.recording:
+        if recorder is not None and recorder.recording:
             try:
                 recorder.stop_to_wav(None)
             except Exception:
