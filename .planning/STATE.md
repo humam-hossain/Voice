@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-09-19)
 Phase: Milestone v1.0 complete (shipped)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-19 — Completed quick task 260919-m0b: Create issue.md to track missing download progress bar
+Last activity: 2026-09-25 — Completed quick task 260925-qq7: Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details
 
 ## Performance Metrics
 
@@ -84,6 +84,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260919-lm1 | Add complete voice parameters and ranges list to README.md | 2026-09-19 | b3d4218 | [260919-lm1-add-complete-voice-parameters-and-ranges](./quick/260919-lm1-add-complete-voice-parameters-and-ranges/) |
 | 260919-m0b | Create issue.md to track missing download progress bar | 2026-09-19 | 8c324ce | [260919-m0b-create-issue-md-to-track-missing-downloa](./quick/260919-m0b-create-issue-md-to-track-missing-downloa/) |
+| 260925-qq7 | Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details | 2026-09-25 | 06c542c | [260925-qq7-improve-stt-failure-diagnostics-in-notif](./quick/260925-qq7-improve-stt-failure-diagnostics-in-notif/) |
 
 ## Deferred Items
 
