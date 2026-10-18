@@ -30,3 +30,4 @@ samples/
 .vscode/
 *~
 .DS_Store
+.gsd/
