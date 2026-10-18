@@ -85,6 +85,7 @@ None yet.
 | 260919-lm1 | Add complete voice parameters and ranges list to README.md | 2026-09-19 | b3d4218 | [260919-lm1-add-complete-voice-parameters-and-ranges](./quick/260919-lm1-add-complete-voice-parameters-and-ranges/) |
 | 260919-m0b | Create issue.md to track missing download progress bar | 2026-09-19 | 8c324ce | [260919-m0b-create-issue-md-to-track-missing-downloa](./quick/260919-m0b-create-issue-md-to-track-missing-downloa/) |
 | 260925-qq7 | Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details | 2026-09-25 | 06c542c | [260925-qq7-improve-stt-failure-diagnostics-in-notif](./quick/260925-qq7-improve-stt-failure-diagnostics-in-notif/) |
+| 261018-omu | Reduce max recording limit to 3 minutes and fix stuck keyboard keys on typing timeout | 2026-10-18 | d927d1f | [261018-omu-reduce-max-recording-limit-to-3-minutes-](./quick/261018-omu-reduce-max-recording-limit-to-3-minutes-/) |
 
 ## Deferred Items
 
