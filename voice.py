@@ -1917,11 +1917,11 @@ def generate_hyprland_block() -> str:
     return (
         "-- voicemode start\n"
         'hl.unbind("SUPER + T")\n'
-        'hl.unbind("SUPER + ALT + M")\n'
+        'hl.unbind("SUPER + CTRL + M")\n'
         'hl.bind("SUPER + SHIFT + M", '
         'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
         '{ description = "Voice STT: Push-to-talk toggle" })\n'
-        'hl.bind("SUPER + ALT + M", '
+        'hl.bind("SUPER + CTRL + M", '
         'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --cancel"), '
         '{ description = "Voice STT: Cancel recording" })\n'
         'hl.bind("SUPER + T", '

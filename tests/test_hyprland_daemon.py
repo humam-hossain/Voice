@@ -22,7 +22,8 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
         self.assertIn("-- voicemode start", block)
         self.assertIn("-- voicemode end", block)
         self.assertIn('hl.unbind("SUPER + T")', block)
-        self.assertIn('hl.unbind("SUPER + ALT + M")', block)
+        self.assertIn('hl.unbind("SUPER + CTRL + M")', block)
+        self.assertNotIn('hl.unbind("SUPER + ALT + M")', block)
         self.assertIn(
             'hl.bind("SUPER + SHIFT + M", '
             'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
@@ -30,7 +31,7 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
             block,
         )
         self.assertIn(
-            'hl.bind("SUPER + ALT + M", '
+            'hl.bind("SUPER + CTRL + M", '
             'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --cancel"), '
             '{ description = "Voice STT: Cancel recording" })',
             block,
