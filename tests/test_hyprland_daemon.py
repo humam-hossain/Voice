@@ -322,9 +322,9 @@ class TestDaemonLifecycleStates(unittest.TestCase):
             ceiling = voice.max_recording_seconds()
             self.assertEqual(ceiling, 15.5)
 
-    def test_safety_recording_duration_ceiling_default_is_180s(self) -> None:
+    def test_safety_recording_duration_ceiling_default_is_1800s(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(voice.max_recording_seconds(), 180.0)
+            self.assertEqual(voice.max_recording_seconds(), 1800.0)
 
     def test_stt_timeout_default_override_and_invalid_values(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

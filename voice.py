@@ -28,14 +28,14 @@ import tempfile
 import termios
 import threading
 import time
-import tty
 import traceback
+import tty
 import urllib.request
 import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -65,7 +65,9 @@ DEFAULT_TTS_BACKEND = "kokoro"
 DEFAULT_KOKORO_VOICE = "af_heart"
 SECONDARY_KOKORO_VOICE = "bm_george"
 DEFAULT_KOKORO_LANG = "en-us"
-MAX_RECORDING_SECONDS = 180.0
+MAX_RECORDING_SECONDS = 1800.0
+DEFAULT_CHUNK_SECONDS = 180.0
+SKIPPED_SEGMENT_MARKER = "[SKIPPING 3MIN SEG]"
 DEFAULT_STT_TIMEOUT_SECONDS = 300.0
 DEFAULT_TTS_MAX_CHARS = int(os.getenv("VOICE_TTS_MAX_CHARS", "5000"))
 
@@ -146,14 +148,30 @@ def resample_pcm(audio: np.ndarray, orig_sr: int, target_sr: int = 16000) -> np.
 
 
 class Recorder:
-    def __init__(self, sample_rate: int = 16000, input_device: Optional[int | str] = None) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        input_device: Optional[int | str] = None,
+        chunk_seconds: float = DEFAULT_CHUNK_SECONDS,
+        save_dir: Optional[Path] = None,
+    ) -> None:
         self.target_sample_rate = sample_rate
         self.actual_sample_rate = sample_rate
         self.input_device = input_device
+        self.chunk_seconds = chunk_seconds
+        self.save_dir = save_dir
         self.frames: list[np.ndarray] = []
         self.statuses: list[str] = []
         self.stream: Optional[sd.InputStream] = None
         self.started_at: Optional[float] = None
+        self._current_frames: list[np.ndarray] = []
+        self._current_samples: int = 0
+        self._chunk_samples: int = int(round(self.actual_sample_rate * self.chunk_seconds))
+        self._lock = threading.Lock()
+        self._write_threads: list[threading.Thread] = []
+        self._chunk_paths: list[tuple[int, Path]] = []
+        self._chunk_idx: int = 0
+        self._session_id: str = time.strftime("%Y%m%d-%H%M%S")
 
     @property
     def sample_rate(self) -> int:
@@ -163,14 +181,68 @@ class Recorder:
     def recording(self) -> bool:
         return self.stream is not None
 
+    def _write_chunk_file(self, audio: np.ndarray, idx: int, save_dir: Optional[Path]) -> Path:
+        if self.actual_sample_rate != self.target_sample_rate:
+            audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
+        pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+        if save_dir:
+            save_dir.mkdir(parents=True, exist_ok=True)
+            wav_path = save_dir / f"voice-{self._session_id}-seg{idx:02d}.wav"
+        else:
+            temp = tempfile.NamedTemporaryFile(prefix=f"voice-{self._session_id}-seg{idx:02d}-", suffix=".wav", delete=False)
+            wav_path = Path(temp.name)
+            temp.close()
+
+        with wave.open(str(wav_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(self.target_sample_rate)
+            wav.writeframes(pcm.tobytes())
+
+        return wav_path
+
+    def _write_chunk_async(self, audio: np.ndarray, idx: int, save_dir: Optional[Path]) -> None:
+        try:
+            wav_path = self._write_chunk_file(audio, idx, save_dir)
+            with self._lock:
+                self._chunk_paths.append((idx, wav_path))
+            print(f"Saved audio segment {idx} ({wav_path.name})...", flush=True)
+        except Exception as exc:
+            print(f"Error writing audio chunk {idx}: {exc}", file=sys.stderr, flush=True)
+
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
             self.statuses.append(str(status))
-        self.frames.append(indata.copy())
+        data = indata.copy()
+        self.frames.append(data)
+
+        with self._lock:
+            self._current_frames.append(data)
+            self._current_samples += len(data)
+            if self._chunk_samples > 0 and self._current_samples >= self._chunk_samples:
+                chunk_audio = np.concatenate(self._current_frames, axis=0)
+                self._current_frames = []
+                self._current_samples = 0
+                self._chunk_idx += 1
+                idx = self._chunk_idx
+                t = threading.Thread(
+                    target=self._write_chunk_async,
+                    args=(chunk_audio, idx, self.save_dir),
+                    daemon=True,
+                )
+                self._write_threads.append(t)
+                t.start()
 
     def start(self) -> None:
         self.frames = []
         self.statuses = []
+        self._current_frames = []
+        self._current_samples = 0
+        self._chunk_paths = []
+        self._write_threads = []
+        self._chunk_idx = 0
+        self._session_id = time.strftime("%Y%m%d-%H%M%S")
         try:
             self.stream = sd.InputStream(
                 samplerate=self.target_sample_rate,
@@ -198,50 +270,71 @@ class Recorder:
                 device=self.input_device,
                 callback=self._callback,
             )
+        self._chunk_samples = int(round(self.actual_sample_rate * self.chunk_seconds))
         self.stream.start()
         self.started_at = time.monotonic()
 
-    def stop_to_wav(self, save_dir: Optional[Path]) -> tuple[Path, float, bool]:
+    def stop_to_wav(self, save_dir: Optional[Path] = None) -> tuple[list[Path], float, bool]:
         if self.stream is None or self.started_at is None:
             raise RuntimeError("recording is not active")
 
+        effective_save_dir = save_dir if save_dir is not None else self.save_dir
+        should_delete = effective_save_dir is None
+
         stream = self.stream
         self.stream = None
-        stream.stop()
-        stream.close()
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
 
         duration = time.monotonic() - self.started_at
         self.started_at = None
 
-        if not self.frames:
+        with self._lock:
+            remaining = list(self._current_frames)
+            self._current_frames = []
+            self._current_samples = 0
+            self._chunk_idx += 1
+            final_idx = self._chunk_idx
+
+        if remaining:
+            try:
+                final_audio = np.concatenate(remaining, axis=0)
+                final_path = self._write_chunk_file(final_audio, final_idx, effective_save_dir)
+                with self._lock:
+                    self._chunk_paths.append((final_idx, final_path))
+            except Exception as exc:
+                print(f"Error writing final audio chunk: {exc}", file=sys.stderr, flush=True)
+
+        for t in self._write_threads:
+            t.join(timeout=10.0)
+
+        if effective_save_dir:
+            effective_save_dir.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                moved_paths = []
+                for idx, path in self._chunk_paths:
+                    if path.parent != effective_save_dir:
+                        dest = effective_save_dir / f"voice-{self._session_id}-seg{idx:02d}.wav"
+                        try:
+                            shutil.move(str(path), str(dest))
+                            moved_paths.append((idx, dest))
+                        except Exception:
+                            moved_paths.append((idx, path))
+                    else:
+                        moved_paths.append((idx, path))
+                self._chunk_paths = moved_paths
+
+        with self._lock:
+            self._chunk_paths.sort(key=lambda x: x[0])
+            paths = [p for _, p in self._chunk_paths]
+
+        if not paths:
             raise RuntimeError("no audio frames were captured")
 
-        audio = np.concatenate(self.frames, axis=0)
-        audio = np.clip(audio, -1.0, 1.0)
-
-        # Resample to target 16 kHz if recorded at hardware fallback rate
-        if self.actual_sample_rate != self.target_sample_rate:
-            audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
-
-        pcm = (audio * 32767.0).astype(np.int16)
-
-        if save_dir:
-            save_dir.mkdir(parents=True, exist_ok=True)
-            wav_path = save_dir / time.strftime("voice-%Y%m%d-%H%M%S.wav")
-            should_delete = False
-        else:
-            temp = tempfile.NamedTemporaryFile(prefix="voice-", suffix=".wav", delete=False)
-            wav_path = Path(temp.name)
-            temp.close()
-            should_delete = True
-
-        with wave.open(str(wav_path), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(self.target_sample_rate)
-            wav.writeframes(pcm.tobytes())
-
-        return wav_path, duration, should_delete
+        return paths, duration, should_delete
 
 
 def parse_device(value: Optional[str]) -> Optional[int | str]:
@@ -550,13 +643,21 @@ def load_model(args: argparse.Namespace, *, force_cpu: bool = False) -> ModelSta
     return state
 
 
-def transcribe(model_state: ModelState, wav_path: Path, args: argparse.Namespace) -> tuple[str, ModelState]:
+def transcribe(
+    model_state: ModelState,
+    wav_path: Path,
+    args: argparse.Namespace,
+    *,
+    initial_prompt: Optional[str] = None,
+) -> tuple[str, ModelState]:
     kwargs = {
         "beam_size": args.beam_size,
         "vad_filter": getattr(args, "vad_filter", True),
     }
     if args.language:
         kwargs["language"] = args.language
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
 
     try:
         segments, info = model_state.model.transcribe(str(wav_path), **kwargs)
@@ -773,6 +874,18 @@ def max_recording_seconds() -> float:
         return float(os.getenv("VOICE_MAX_RECORDING_SECONDS", str(MAX_RECORDING_SECONDS)))
     except ValueError:
         return MAX_RECORDING_SECONDS
+
+
+def chunk_seconds(args: argparse.Namespace | None = None) -> float:
+    if args and getattr(args, "chunk_seconds", None) is not None:
+        try:
+            return max(1.0, float(args.chunk_seconds))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(1.0, float(os.getenv("VOICE_CHUNK_SECONDS", str(DEFAULT_CHUNK_SECONDS))))
+    except ValueError:
+        return DEFAULT_CHUNK_SECONDS
 
 
 def stt_timeout_seconds() -> float:
@@ -1524,6 +1637,8 @@ def background_argv(args: argparse.Namespace) -> list[str]:
         argv.append("--keep-newlines")
     else:
         argv.append("--no-keep-newlines")
+    if getattr(args, "chunk_seconds", None) is not None:
+        argv += ["--chunk-seconds", str(args.chunk_seconds)]
     return argv
 
 
@@ -1590,12 +1705,18 @@ def run_background_recording(args: argparse.Namespace) -> int:
         nonlocal cancel_requested
         cancel_requested = True
 
-    wav_path: Path | None = None
+    wav_paths: list[Path] = []
     should_delete = False
     try:
         input_device = parse_device(args.input_device)
         sample_rate = resolve_sample_rate(input_device, args.sample_rate)
-        recorder = Recorder(sample_rate=sample_rate, input_device=input_device)
+        seg_duration = chunk_seconds(args)
+        recorder = Recorder(
+            sample_rate=sample_rate,
+            input_device=input_device,
+            chunk_seconds=seg_duration,
+            save_dir=args.save_dir,
+        )
         signal.signal(signal.SIGUSR1, handle_usr1)
         signal.signal(signal.SIGTERM, handle_cancel)
         signal.signal(signal.SIGINT, handle_cancel)
@@ -1636,36 +1757,58 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
         write_pid_state(pid, "transcribing")
         active_stage = "WAV finalization"
-        wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
+        raw_paths, duration, should_delete = recorder.stop_to_wav(args.save_dir)
+        wav_paths = [Path(p) for p in (raw_paths if isinstance(raw_paths, (list, tuple)) else [raw_paths])]
         play_cue_async(args, "stop")
-        # Routine "Transcribing..." toast suppressed per D-17
-        print(f"Stopped ({duration:.1f}s). Transcribing {wav_path}...", flush=True)
+        total_chunks = len(wav_paths)
+        chunk_str = f"{total_chunks} segment" if total_chunks == 1 else f"{total_chunks} segments"
+        print(f"Stopped ({duration:.1f}s, {chunk_str}). Transcribing...", flush=True)
 
-        active_stage = "transcription setup"
+        active_stage = "Whisper model loading"
+        model_state = load_model(args)
+
+        active_stage = "Whisper transcription"
         timeout_seconds = stt_timeout_seconds()
-        watchdog_expired = threading.Event()
-        watchdog_started_at = time.monotonic()
-        watchdog = threading.Timer(
-            timeout_seconds,
-            transcription_watchdog_handler,
-            args=[pid, args, wav_path, timeout_seconds, watchdog_started_at, watchdog_expired],
-        )
-        watchdog.daemon = True
-        watchdog.start()
-        try:
-            active_stage = "Whisper model loading"
-            model_state = load_model(args)
-            active_stage = "Whisper transcription"
-            text, _ = transcribe(model_state, wav_path, args)
-        finally:
-            watchdog.cancel()
-            if watchdog_expired.is_set():
-                should_delete = False
+        transcripts: list[str] = []
+        last_success_text = ""
 
-        if watchdog_expired.is_set():
-            return 1
+        for idx, chunk_path in enumerate(wav_paths, 1):
+            segment_label = f"segment {idx}/{total_chunks}"
+            print(f"Transcribing {segment_label} ({chunk_path})...", flush=True)
+            watchdog_expired = threading.Event()
+            watchdog_started_at = time.monotonic()
+            watchdog = threading.Timer(
+                timeout_seconds,
+                transcription_watchdog_handler,
+                args=[pid, args, chunk_path, timeout_seconds, watchdog_started_at, watchdog_expired],
+            )
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                initial_prompt = last_success_text[-200:] if last_success_text else None
+                seg_text, model_state = transcribe(
+                    model_state,
+                    chunk_path,
+                    args,
+                    initial_prompt=initial_prompt,
+                )
+                if seg_text and seg_text.strip():
+                    transcripts.append(seg_text.strip())
+                    last_success_text = seg_text.strip()
+            except Exception as exc:
+                print(f"Error transcribing {segment_label} ({chunk_path}): {exc}", file=sys.stderr, flush=True)
+                report_stt_failure(f"transcription of {segment_label}", exc, args, wav_path=chunk_path)
+                transcripts.append(SKIPPED_SEGMENT_MARKER)
+            finally:
+                watchdog.cancel()
+                if should_delete and not watchdog_expired.is_set():
+                    try:
+                        chunk_path.unlink()
+                    except OSError:
+                        pass
 
         active_stage = "STT result handling"
+        text = " ".join(t for t in transcripts if t).strip()
         print(text or "[no speech detected]", flush=True)
 
         if text and args.paste:
@@ -1697,11 +1840,12 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 recorder.stop_to_wav(None)
             except Exception:
                 pass
-        if should_delete and wav_path:
-            try:
-                wav_path.unlink()
-            except OSError:
-                pass
+        if should_delete and wav_paths:
+            for p in wav_paths:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
         remove_pid(pid)
 
 
@@ -1886,7 +2030,12 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
     if args.check:
         return 0
 
-    recorder = Recorder(sample_rate=sample_rate, input_device=input_device)
+    recorder = Recorder(
+        sample_rate=sample_rate,
+        input_device=input_device,
+        chunk_seconds=chunk_seconds(args),
+        save_dir=args.save_dir,
+    )
     print("")
     print("Terminal mode: press Ctrl+B here to start recording, then Ctrl+B again to stop.")
     print(f"Audio: {sample_rate} Hz mono")
@@ -1915,21 +2064,38 @@ def run_terminal_mode(args: argparse.Namespace) -> int:
                     )
                     continue
 
-                wav_path, duration, should_delete = recorder.stop_to_wav(args.save_dir)
+                result = recorder.stop_to_wav(args.save_dir)
+                raw_paths, duration, should_delete = result
+                wav_paths = [Path(p) for p in (raw_paths if isinstance(raw_paths, (list, tuple)) else [raw_paths])]
                 next_recording_cue = None
                 play_cue_async(args, "stop")
-                print(f"Stopped ({duration:.1f}s). Transcribing...", flush=True)
+                total_chunks = len(wav_paths)
+                chunk_str = f"{total_chunks} segment" if total_chunks == 1 else f"{total_chunks} segments"
+                print(f"Stopped ({duration:.1f}s, {chunk_str}). Transcribing...", flush=True)
+                transcripts = []
+                last_success = ""
                 try:
-                    text, model_state = transcribe(model_state, wav_path, args)
-                    print("")
+                    for idx, chunk_path in enumerate(wav_paths, 1):
+                        prompt = last_success[-200:] if last_success else None
+                        try:
+                            seg_text, model_state = transcribe(model_state, chunk_path, args, initial_prompt=prompt)
+                            if seg_text and seg_text.strip():
+                                transcripts.append(seg_text.strip())
+                                last_success = seg_text.strip()
+                        except Exception as exc:
+                            print(f"Segment {idx} failed: {exc}", file=sys.stderr)
+                            transcripts.append(SKIPPED_SEGMENT_MARKER)
+                    text = " ".join(transcripts).strip()
+                    print()
                     print(text or "[no speech detected]")
-                    print("")
+                    print()
                 finally:
                     if should_delete:
-                        try:
-                            wav_path.unlink()
-                        except OSError:
-                            pass
+                        for chunk_path in wav_paths:
+                            try:
+                                chunk_path.unlink()
+                            except OSError:
+                                pass
                 print("Press Ctrl+B to record again. Ctrl+C exits.")
     except KeyboardInterrupt:
         print("\nExiting.")
@@ -2744,6 +2910,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input-device", default=os.getenv("VOICE_INPUT_DEVICE"))
     parser.add_argument("--sample-rate", type=int, default=None)
     parser.add_argument("--save-dir", type=Path, default=None, help="Keep recorded wav files in this directory.")
+    parser.add_argument(
+        "--chunk-seconds",
+        type=float,
+        default=None,
+        help="Audio chunk duration in seconds (default: 180.0 / 3 minutes).",
+    )
     parser.add_argument("--allow-download", action="store_true", help="Allow faster-whisper to download a missing model.")
     parser.add_argument("--list-devices", action="store_true", help="Print sounddevice devices and exit.")
     parser.add_argument("--check", action="store_true", help="Load the model and print the selected backend, then exit.")
