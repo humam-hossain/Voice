@@ -22,10 +22,17 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
         self.assertIn("-- voicemode start", block)
         self.assertIn("-- voicemode end", block)
         self.assertIn('hl.unbind("SUPER + T")', block)
+        self.assertIn('hl.unbind("SUPER + ALT + M")', block)
         self.assertIn(
             'hl.bind("SUPER + SHIFT + M", '
             'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
             '{ description = "Voice STT: Push-to-talk toggle" })',
+            block,
+        )
+        self.assertIn(
+            'hl.bind("SUPER + ALT + M", '
+            'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --cancel"), '
+            '{ description = "Voice STT: Cancel recording" })',
             block,
         )
         self.assertIn(
@@ -35,6 +42,30 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
             block,
         )
         self.assertIn('HOME .. "/.local/bin/voice', block)
+
+    def test_cancel_recording_active(self) -> None:
+        args = voice.parse_args(["--cancel"])
+        with patch("voice.read_pid_state", return_value=(12345, "recording")), \
+             patch("voice.process_alive", return_value=True), \
+             patch("os.kill") as mock_kill, \
+             patch("voice.remove_pid") as mock_remove, \
+             patch("voice.play_cue") as mock_cue, \
+             patch("voice.notify") as mock_notify:
+            ret = voice.cancel_recording(args)
+            self.assertEqual(ret, 0)
+            mock_kill.assert_called_once_with(12345, voice.signal.SIGTERM)
+            mock_remove.assert_called_once_with(12345)
+            mock_cue.assert_called_once_with(args, "stop")
+            mock_notify.assert_called_once_with(voice.APP_NAME, "Recording cancelled.", args)
+
+    def test_cancel_recording_idle(self) -> None:
+        args = voice.parse_args(["--cancel"])
+        with patch("voice.read_pid_state", return_value=(None, "idle")), \
+             patch("voice.process_alive", return_value=False), \
+             patch("os.kill") as mock_kill:
+            ret = voice.cancel_recording(args)
+            self.assertEqual(ret, 0)
+            mock_kill.assert_not_called()
 
     def test_unlocked_only_execution(self) -> None:
         block = voice.generate_hyprland_block()

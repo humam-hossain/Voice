@@ -869,6 +869,22 @@ def cancel_active_stt() -> None:
         remove_pid(pid)
 
 
+def cancel_recording(args: argparse.Namespace) -> int:
+    pid, state = read_pid_state(PID_FILE)
+    if pid and process_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+        remove_pid(pid)
+        play_cue(args, "stop")
+        notify(APP_NAME, "Recording cancelled.", args)
+        print("Cancelled voice recording.")
+        return 0
+    print("No active voice recording to cancel.")
+    return 0
+
+
 def max_recording_seconds() -> float:
     try:
         return float(os.getenv("VOICE_MAX_RECORDING_SECONDS", str(MAX_RECORDING_SECONDS)))
@@ -1901,9 +1917,13 @@ def generate_hyprland_block() -> str:
     return (
         "-- voicemode start\n"
         'hl.unbind("SUPER + T")\n'
+        'hl.unbind("SUPER + ALT + M")\n'
         'hl.bind("SUPER + SHIFT + M", '
         'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --toggle"), '
         '{ description = "Voice STT: Push-to-talk toggle" })\n'
+        'hl.bind("SUPER + ALT + M", '
+        'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --cancel"), '
+        '{ description = "Voice STT: Cancel recording" })\n'
         'hl.bind("SUPER + T", '
         'hl.dsp.exec_cmd(HOME .. "/.local/bin/voice --speak-selection"), '
         '{ description = "Voice TTS: Speak selection" })\n'
@@ -2920,6 +2940,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--list-devices", action="store_true", help="Print sounddevice devices and exit.")
     parser.add_argument("--check", action="store_true", help="Load the model and print the selected backend, then exit.")
     parser.add_argument("--toggle", action="store_true", help="Toggle background recording; stop transcribes and inserts text.")
+    parser.add_argument("--cancel", action="store_true", help="Cancel active background recording without transcribing.")
     parser.add_argument("--watch", action="store_true", help="Watch global hotkey activity in this terminal.")
     parser.add_argument("--terminal", action="store_true", help="Use terminal-only Ctrl+B recording mode.")
     parser.add_argument("--status", action="store_true", help="Print whether background recording is active.")
@@ -3113,6 +3134,8 @@ def main() -> int:
         return print_status()
     if args.toggle:
         return toggle_background_recording(args)
+    if args.cancel:
+        return cancel_recording(args)
 
     args.language = args.language.strip() or None
 
