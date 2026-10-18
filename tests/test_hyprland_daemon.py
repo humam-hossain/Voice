@@ -322,16 +322,121 @@ class TestDaemonLifecycleStates(unittest.TestCase):
             ceiling = voice.max_recording_seconds()
             self.assertEqual(ceiling, 15.5)
 
+    def test_safety_recording_duration_ceiling_default_is_180s(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(voice.max_recording_seconds(), 180.0)
+
+    def test_stt_timeout_default_override_and_invalid_values(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(voice.stt_timeout_seconds(), 300.0)
+
+        with patch.dict(os.environ, {"VOICE_STT_TIMEOUT_SECONDS": "125.5"}):
+            self.assertEqual(voice.stt_timeout_seconds(), 125.5)
+
+        for invalid_value in ("", "0", "-1", "nan", "inf", "invalid"):
+            with self.subTest(value=invalid_value), patch.dict(
+                os.environ, {"VOICE_STT_TIMEOUT_SECONDS": invalid_value}
+            ):
+                self.assertEqual(voice.stt_timeout_seconds(), 300.0)
+
     def test_transcription_watchdog_timeout(self) -> None:
-        # Verifies watchdog handler cleans up PID on timeout
-        with patch("voice.remove_pid") as mock_remove, patch("os._exit") as mock_exit:
-            voice.transcription_watchdog_handler(9999)
+        args = voice.parse_args([])
+        wav_path = Path("/tmp/retained-recording.wav")
+        expired = voice.threading.Event()
+        with patch("voice.time.monotonic", return_value=162.5), \
+             patch("voice.report_stt_failure") as mock_report, \
+             patch("voice.remove_pid") as mock_remove, \
+             patch("voice.os._exit") as mock_exit:
+            voice.transcription_watchdog_handler(9999, args, wav_path, 120.0, 100.0, expired)
+
+            mock_report.assert_called_once()
+            stage, error, reported_args = mock_report.call_args.args
+            self.assertEqual(stage, "Whisper model loading/transcription timeout")
+            self.assertIsInstance(error, TimeoutError)
+            self.assertIn("120s", str(error))
+            self.assertIn("62.5s", str(error))
+            self.assertIs(reported_args, args)
+            self.assertEqual(mock_report.call_args.kwargs["wav_path"], wav_path)
+            self.assertTrue(expired.is_set())
             mock_remove.assert_called_once_with(9999)
             mock_exit.assert_called_once_with(1)
+
+    def test_background_recording_uses_configured_timeout(self) -> None:
+        args = voice.parse_args([])
+        args.beep = False
+        handlers = {}
+        wav_path = Path("/tmp/test-recording.wav")
+        mock_recorder = MagicMock()
+        mock_recorder.recording = True
+        mock_recorder.started_at = None
+        mock_recorder.start.side_effect = lambda: setattr(mock_recorder, "started_at", time.monotonic())
+        mock_recorder.stop_to_wav.return_value = (wav_path, 1.0, False)
+        mock_timer = MagicMock()
+
+        def fake_signal(sig, handler):
+            handlers[sig] = handler
+
+        def stop_recording(_seconds):
+            handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
+
+        with patch.dict(os.environ, {"VOICE_STT_TIMEOUT_SECONDS": "42"}), \
+             patch("signal.signal", side_effect=fake_signal), \
+             patch("voice.parse_device", return_value=None), \
+             patch("voice.resolve_sample_rate", return_value=16000), \
+             patch("voice.Recorder", return_value=mock_recorder), \
+             patch("voice.play_cue"), \
+             patch("voice.play_cue_async"), \
+             patch("voice.write_pid_state"), \
+             patch("voice.remove_pid"), \
+             patch("voice.load_model", return_value=MagicMock()), \
+             patch("voice.transcribe", return_value=("Done", MagicMock())), \
+             patch("voice.insert_text", return_value=True), \
+             patch("voice.threading.Timer", return_value=mock_timer) as mock_timer_factory, \
+             patch("time.sleep", side_effect=stop_recording):
+            self.assertEqual(voice.run_background_recording(args), 0)
+
+        mock_timer_factory.assert_called_once()
+        self.assertEqual(mock_timer_factory.call_args.args[0], 42.0)
+        self.assertIs(mock_timer_factory.call_args.args[1], voice.transcription_watchdog_handler)
+        watchdog_args = mock_timer_factory.call_args.kwargs["args"]
+        self.assertEqual(watchdog_args[:4], [os.getpid(), args, wav_path, 42.0])
+        self.assertIsInstance(watchdog_args[4], float)
+        self.assertIsInstance(watchdog_args[5], voice.threading.Event)
+        mock_timer.start.assert_called_once()
+        mock_timer.cancel.assert_called_once()
 
 
 class TestDesktopNotificationBehavior(unittest.TestCase):
     """Test suite covering focus-safe notification rules, urgency flags, and cue intervals."""
+
+    def test_stt_failure_notification_includes_bounded_recovery_path(self) -> None:
+        args = voice.parse_args([])
+        wav_path = Path("/") / ("a" * 260) / "recovery.wav"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "voice.log"
+            with patch("voice.LOG_FILE", log_path), \
+                 patch("voice.shutil.which", return_value="/usr/bin/notify-send"), \
+                 patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-1"}, clear=True), \
+                 patch("voice.subprocess.run") as mock_run:
+                voice.report_stt_failure(
+                    "Whisper model loading/transcription timeout",
+                    TimeoutError("STT exceeded watchdog"),
+                    args,
+                    wav_path=wav_path,
+                )
+
+            logged_failure = log_path.read_text(encoding="utf-8")
+            self.assertIn(f"recovery WAV: {wav_path}", logged_failure)
+            self.assertIn("stage: Whisper model loading/transcription timeout", logged_failure)
+
+            command = mock_run.call_args.args[0]
+            message = command[2]
+            self.assertIn("Recovery WAV:", message)
+            self.assertIn("recovery.wav", message)
+            self.assertIn("Log:", message)
+            self.assertLessEqual(len(message), 240)
+            self.assertIn("-u", command)
+            self.assertIn("critical", command)
 
     def test_routine_stt_notifications_suppressed(self) -> None:
         args = voice.parse_args([])

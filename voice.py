@@ -17,6 +17,7 @@ os.environ.setdefault("PIPEWIRE_PROPS", '{ application.name = voicemode }')
 import argparse
 import ast
 import asyncio
+import math
 import re
 import select
 import shutil
@@ -64,7 +65,8 @@ DEFAULT_TTS_BACKEND = "kokoro"
 DEFAULT_KOKORO_VOICE = "af_heart"
 SECONDARY_KOKORO_VOICE = "bm_george"
 DEFAULT_KOKORO_LANG = "en-us"
-MAX_RECORDING_SECONDS = 300.0
+MAX_RECORDING_SECONDS = 180.0
+DEFAULT_STT_TIMEOUT_SECONDS = 300.0
 DEFAULT_TTS_MAX_CHARS = int(os.getenv("VOICE_TTS_MAX_CHARS", "5000"))
 
 KOKORO_ASSETS = [
@@ -612,6 +614,7 @@ def report_stt_failure(
     args: argparse.Namespace,
     *,
     previous_failures: tuple[tuple[str, Exception], ...] = (),
+    wav_path: Path | None = None,
 ) -> None:
     """Log full STT failure context and show a bounded notification without input contents."""
     if stage.startswith("CPU fallback"):
@@ -628,6 +631,8 @@ def report_stt_failure(
     )
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     log_lines = [f"\n--- STT failure ({timestamp}) ---", f"stage: {stage}", f"context: {context}"]
+    if wav_path is not None:
+        log_lines.append(f"recovery WAV: {wav_path}")
     for previous_stage, previous_error in previous_failures:
         previous_traceback = "".join(
             traceback.format_exception(type(previous_error), previous_error, previous_error.__traceback__)
@@ -665,11 +670,21 @@ def report_stt_failure(
     log_pointer = " ".join(str(LOG_FILE).split())
     if len(log_pointer) > 100:
         log_pointer = f"…{log_pointer[-99:]}"
-    suffix = f" Log: {log_pointer}"
     max_message_length = 240
+    log_suffix = f" Log: {log_pointer}"
+    recovery_suffix = ""
+    if wav_path is not None:
+        recovery_marker = " Recovery WAV: "
+        max_path_length = max(0, max_message_length - len(prefix) - len(log_suffix) - len(recovery_marker))
+        recovery_path = str(wav_path)
+        if len(recovery_path) > max_path_length:
+            recovery_path = f"…{recovery_path[-(max_path_length - 1):]}" if max_path_length > 1 else ""
+        if recovery_path:
+            recovery_suffix = f"{recovery_marker}{recovery_path}"
+    suffix = f"{recovery_suffix}{log_suffix}"
     available = max(0, max_message_length - len(prefix) - len(suffix))
     if len(summary) > available:
-        summary = summary[: max(0, available - 1)].rstrip() + "…"
+        summary = summary[: max(0, available - 1)].rstrip() + "…" if available else ""
     try:
         notify(APP_NAME, f"{prefix}{summary}{suffix}", args, urgency="critical")
     except Exception as notify_error:
@@ -760,6 +775,14 @@ def max_recording_seconds() -> float:
         return MAX_RECORDING_SECONDS
 
 
+def stt_timeout_seconds() -> float:
+    try:
+        timeout = float(os.getenv("VOICE_STT_TIMEOUT_SECONDS", str(DEFAULT_STT_TIMEOUT_SECONDS)))
+    except (TypeError, ValueError):
+        return DEFAULT_STT_TIMEOUT_SECONDS
+    return timeout if math.isfinite(timeout) and timeout > 0 else DEFAULT_STT_TIMEOUT_SECONDS
+
+
 def recording_beep_interval(args: argparse.Namespace) -> float:
     try:
         default_interval = getattr(args, "recording_beep_interval", 5.0)
@@ -768,10 +791,35 @@ def recording_beep_interval(args: argparse.Namespace) -> float:
         return 5.0
 
 
-def transcription_watchdog_handler(pid: int) -> None:
-    print("voice STT transcription watchdog timed out after 60s. Aborting daemon.", file=sys.stderr, flush=True)
-    remove_pid(pid)
-    os._exit(1)
+def transcription_watchdog_handler(
+    pid: int,
+    args: argparse.Namespace,
+    wav_path: Path,
+    timeout_seconds: float,
+    started_at: float,
+    expired: threading.Event,
+) -> None:
+    expired.set()
+    elapsed = time.monotonic() - started_at
+    error = TimeoutError(
+        f"STT exceeded its {timeout_seconds:g}s watchdog limit after {elapsed:.1f}s"
+    )
+    try:
+        report_stt_failure(
+            "Whisper model loading/transcription timeout",
+            error,
+            args,
+            wav_path=wav_path,
+        )
+    except Exception as report_error:
+        print(
+            f"Could not report STT watchdog timeout: {type(report_error).__name__}: {report_error}",
+            file=sys.stderr,
+            flush=True,
+        )
+    finally:
+        remove_pid(pid)
+        os._exit(1)
 
 
 def display_server() -> str:
@@ -834,6 +882,32 @@ def resolve_wayland_backend(args: argparse.Namespace) -> Optional[str]:
     return None
 
 
+def typing_timeout(text: str, type_delay: int = 2) -> float:
+    """Calculate an adaptive typing timeout based on character count and keystroke delay.
+
+    For small texts (<= 50 chars), returns a baseline 15.0s.
+    For longer transcripts, dynamically scales with text length and typing delay so multi-minute
+    dictations (which can contain 2,000+ characters) do not trigger premature timeout and kill
+    the input synthesizer mid-keystroke.
+    """
+    if len(text) <= 50:
+        return 15.0
+    estimated_sec = len(text) * (max(0, type_delay) + 25) / 1000.0
+    return max(15.0, estimated_sec * 2.0 + 15.0)
+
+
+def release_virtual_keys() -> None:
+    """Emergency reset for any virtual keyboard keys stuck down in ydotoold."""
+    if shutil.which("ydotool"):
+        try:
+            # Emit key release (:0) for standard Linux keyboard keycodes (1 to 127)
+            # to un-stick any keys if a typing process was interrupted mid-keystroke.
+            key_releases = [f"{k}:0" for k in range(1, 128)]
+            subprocess.run(["ydotool", "key", *key_releases], check=False, timeout=2.0, capture_output=True)
+        except Exception:
+            pass
+
+
 def type_text(text: str, args: argparse.Namespace) -> bool:
     text = normalize_typed_text(text, keep_newlines=getattr(args, "keep_newlines", False))
     if not text:
@@ -846,8 +920,9 @@ def type_text(text: str, args: argparse.Namespace) -> bool:
     server = display_server()
     if server == "wayland":
         backend = resolve_wayland_backend(args)
+        type_delay = max(0, getattr(args, "type_delay", 2))
+        timeout = typing_timeout(text, type_delay)
         if backend == "wtype":
-            type_delay = max(0, getattr(args, "type_delay", 2))
             cmd = ["wtype"]
             # Upstream wtype aborts with "Invalid sleep time" if -d <= 0.
             # Omitting -d defaults delay_ms to 0.
@@ -855,8 +930,11 @@ def type_text(text: str, args: argparse.Namespace) -> bool:
                 cmd.extend(["-d", str(type_delay)])
             cmd.append("-")
             try:
-                subprocess.run(cmd, input=text, text=True, check=True, timeout=15.0)
+                subprocess.run(cmd, input=text, text=True, check=True, timeout=timeout)
                 return True
+            except subprocess.TimeoutExpired:
+                release_virtual_keys()
+                return False
             except Exception:
                 # If 'auto' was requested, attempt fallback to ydotool before giving up
                 if getattr(args, "wayland_backend", "auto") == "auto" and shutil.which("ydotool"):
@@ -864,23 +942,23 @@ def type_text(text: str, args: argparse.Namespace) -> bool:
                         subprocess.run(
                             ["ydotool", "type", "--key-delay", str(type_delay), "--", text],
                             check=True,
-                            timeout=15.0,
+                            timeout=timeout,
                         )
                         return True
                     except Exception:
-                        pass
+                        release_virtual_keys()
                 return False
 
         if backend == "ydotool":
-            type_delay = max(0, getattr(args, "type_delay", 2))
             try:
                 subprocess.run(
                     ["ydotool", "type", "--key-delay", str(type_delay), "--", text],
                     check=True,
-                    timeout=15.0,
+                    timeout=timeout,
                 )
                 return True
             except Exception:
+                release_virtual_keys()
                 return False
 
         return False
@@ -889,6 +967,8 @@ def type_text(text: str, args: argparse.Namespace) -> bool:
     xdotool = shutil.which("xdotool")
     if not os.getenv("DISPLAY") or not xdotool:
         return False
+    type_delay = max(0, getattr(args, "type_delay", 2))
+    timeout = typing_timeout(text, type_delay)
     try:
         subprocess.run(
             [
@@ -896,12 +976,12 @@ def type_text(text: str, args: argparse.Namespace) -> bool:
                 "type",
                 "--clearmodifiers",
                 "--delay",
-                str(max(0, getattr(args, "type_delay", 2))),
+                str(type_delay),
                 "--",
                 text,
             ],
             check=True,
-            timeout=15.0,
+            timeout=timeout,
         )
         return True
     except Exception:
@@ -932,7 +1012,7 @@ def paste_clipboard(text: str, args: argparse.Namespace, shortcut: str = "ctrl+v
                         subprocess.run(["ydotool", "key", shortcut], check=True, timeout=15.0)
                         return True
                     except Exception:
-                        pass
+                        release_virtual_keys()
                 return False
 
         if backend == "ydotool":
@@ -940,6 +1020,7 @@ def paste_clipboard(text: str, args: argparse.Namespace, shortcut: str = "ctrl+v
                 subprocess.run(["ydotool", "key", shortcut], check=True, timeout=15.0)
                 return True
             except Exception:
+                release_virtual_keys()
                 return False
 
         return False
@@ -1561,7 +1642,14 @@ def run_background_recording(args: argparse.Namespace) -> int:
         print(f"Stopped ({duration:.1f}s). Transcribing {wav_path}...", flush=True)
 
         active_stage = "transcription setup"
-        watchdog = threading.Timer(60.0, transcription_watchdog_handler, args=[pid])
+        timeout_seconds = stt_timeout_seconds()
+        watchdog_expired = threading.Event()
+        watchdog_started_at = time.monotonic()
+        watchdog = threading.Timer(
+            timeout_seconds,
+            transcription_watchdog_handler,
+            args=[pid, args, wav_path, timeout_seconds, watchdog_started_at, watchdog_expired],
+        )
         watchdog.daemon = True
         watchdog.start()
         try:
@@ -1571,6 +1659,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
             text, _ = transcribe(model_state, wav_path, args)
         finally:
             watchdog.cancel()
+            if watchdog_expired.is_set():
+                should_delete = False
+
+        if watchdog_expired.is_set():
+            return 1
 
         active_stage = "STT result handling"
         print(text or "[no speech detected]", flush=True)
@@ -2015,6 +2108,7 @@ def kill_all_daemons(args: argparse.Namespace) -> int:
                 print(f"Removed stale lock for {name} (PID {pid}, state: {state}).")
                 cleaned += 1
             remove_pid(path=pid_path)
+    release_virtual_keys()
     if cleaned == 0:
         print("No active daemons or stale PID locks found.")
     else:
@@ -2624,6 +2718,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Terminate active background workers and purge stale PID files.",
     )
+    parser.add_argument(
+        "--reset-keys",
+        action="store_true",
+        help="Emergency release of any stuck virtual keyboard keys.",
+    )
     parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "medium.en"))
     parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "cpu"))
     parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "int8"))
@@ -2802,6 +2901,10 @@ def main() -> int:
         return run_doctor(args)
     if getattr(args, "verify", False):
         return run_verification(args)
+    if getattr(args, "reset_keys", False):
+        release_virtual_keys()
+        print("Virtual keyboard keys reset.")
+        return 0
 
     if args.download_tts_assets:
         return download_tts_assets(args)

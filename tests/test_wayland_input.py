@@ -336,5 +336,52 @@ class TestNotifyWayland(unittest.TestCase):
             )
 
 
+class TestTypingTimeoutAndStuckKeyProtection(unittest.TestCase):
+    """Test dynamic typing timeout scaling and emergency key release protection."""
+
+    def test_typing_timeout_short_text_defaults_to_15s(self):
+        self.assertEqual(voice.typing_timeout("hello", 2), 15.0)
+        self.assertEqual(voice.typing_timeout("a" * 50, 2), 15.0)
+
+    def test_typing_timeout_scales_for_long_transcripts(self):
+        long_timeout = voice.typing_timeout("a" * 2000, 2)
+        # 2000 chars at (2+25)ms = 54s estimated -> 54*2 + 15 = 123s
+        self.assertGreater(long_timeout, 100.0)
+
+    @patch("voice.release_virtual_keys")
+    @patch("voice.display_server", return_value="wayland")
+    @patch("shutil.which", return_value="/usr/bin/wtype")
+    @patch("subprocess.run")
+    def test_wtype_timeout_releases_keys_and_aborts_without_retyping(self, mock_run, mock_which, mock_server, mock_release):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["wtype"], timeout=15.0)
+        args = argparse.Namespace(
+            type_delay=2,
+            pre_type_delay=0,
+            keep_newlines=False,
+            wayland_backend="auto",
+        )
+        result = voice.type_text("some long text", args)
+        self.assertFalse(result)
+        mock_release.assert_called_once()
+        # Verify ydotool was NOT called to retype after timeout
+        self.assertEqual(mock_run.call_count, 1)
+
+    @patch("shutil.which", return_value="/usr/bin/ydotool")
+    @patch("subprocess.run")
+    def test_release_virtual_keys_invokes_ydotool_key_releases(self, mock_run, mock_which):
+        voice.release_virtual_keys()
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[0], "ydotool")
+        self.assertEqual(cmd[1], "key")
+        self.assertIn("20:0", cmd)  # KEY_T key release
+        self.assertIn("21:0", cmd)  # KEY_Y key release
+
+    def test_reset_keys_cli_flag_parsing(self):
+        with patch.object(voice.sys, "argv", ["voice", "--reset-keys"]):
+            args = voice.parse_args()
+            self.assertTrue(args.reset_keys)
+
+
 if __name__ == "__main__":
     unittest.main()
