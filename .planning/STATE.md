@@ -87,6 +87,7 @@ None yet.
 | 260925-qq7 | Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details | 2026-09-25 | 06c542c | [260925-qq7-improve-stt-failure-diagnostics-in-notif](./quick/260925-qq7-improve-stt-failure-diagnostics-in-notif/) |
 | 261018-omu | Reduce max recording limit to 3 minutes and fix stuck keyboard keys on typing timeout | 2026-10-18 | d927d1f | [261018-omu-reduce-max-recording-limit-to-3-minutes-](./quick/261018-omu-reduce-max-recording-limit-to-3-minutes-/) |
 | 261018-pdy | Chunk audio recording into 3-min segments and sequentially transcribe on stop with error skipping | 2026-10-18 | cebd0fb | [261018-pdy-chunk-audio-recording-into-3-min-segment](./quick/261018-pdy-chunk-audio-recording-into-3-min-segment/) |
+| 261018-q8q | Add cancel keybind Super+Alt+M to cancel recording and replace mute | 2026-10-18 | e863ddc | [261018-q8q-add-cancel-keybind-super-alt-m-to-cancel](./quick/261018-q8q-add-cancel-keybind-super-alt-m-to-cancel/) |
 
 ## Deferred Items
 
