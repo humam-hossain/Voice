@@ -137,61 +137,61 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FND-01 | TBD | Pending |
-| FND-02 | TBD | Pending |
-| FND-03 | TBD | Pending |
-| FND-04 | TBD | Pending |
-| FND-05 | TBD | Pending |
-| LED-01 | TBD | Pending |
-| LED-02 | TBD | Pending |
-| LED-03 | TBD | Pending |
-| LED-04 | TBD | Pending |
-| LED-05 | TBD | Pending |
-| LED-06 | TBD | Pending |
-| LED-07 | TBD | Pending |
-| DEC-01 | TBD | Pending |
-| DEC-02 | TBD | Pending |
-| DEC-03 | TBD | Pending |
-| DEC-04 | TBD | Pending |
-| STS-01 | TBD | Pending |
-| STS-02 | TBD | Pending |
-| STS-03 | TBD | Pending |
-| STS-04 | TBD | Pending |
-| STS-05 | TBD | Pending |
-| ETA-01 | TBD | Pending |
-| ETA-02 | TBD | Pending |
-| ETA-03 | TBD | Pending |
-| ETA-04 | TBD | Pending |
-| ETA-05 | TBD | Pending |
-| ETA-06 | TBD | Pending |
-| ETA-07 | TBD | Pending |
-| ETA-08 | TBD | Pending |
-| ETA-09 | TBD | Pending |
-| RPT-01 | TBD | Pending |
-| RPT-02 | TBD | Pending |
-| RPT-03 | TBD | Pending |
-| RPT-04 | TBD | Pending |
-| RPT-05 | TBD | Pending |
-| RPT-06 | TBD | Pending |
-| UI-01 | TBD | Pending |
-| UI-02 | TBD | Pending |
-| UI-03 | TBD | Pending |
-| UI-04 | TBD | Pending |
-| UI-05 | TBD | Pending |
-| ACC-01 | TBD | Pending |
-| ACC-02 | TBD | Pending |
-| ACC-03 | TBD | Pending |
-| ACC-04 | TBD | Pending |
-| ACC-05 | TBD | Pending |
-| ACC-06 | TBD | Pending |
-| ACC-07 | TBD | Pending |
+| FND-01 | 6 | Pending |
+| FND-02 | 6 | Pending |
+| FND-03 | 6 | Pending |
+| FND-04 | 6 | Pending |
+| FND-05 | 6 | Pending |
+| LED-01 | 6 | Pending |
+| LED-02 | 6 | Pending |
+| LED-03 | 6 | Pending |
+| LED-04 | 6 | Pending |
+| LED-05 | 6 | Pending |
+| LED-06 | 6 | Pending |
+| LED-07 | 6 | Pending |
+| DEC-01 | 6 | Pending |
+| DEC-02 | 6 | Pending |
+| DEC-03 | 6 | Pending |
+| DEC-04 | 6 | Pending |
+| STS-01 | 6 | Pending |
+| STS-02 | 6 | Pending |
+| STS-03 | 6 | Pending |
+| STS-04 | 6 | Pending |
+| STS-05 | 6 | Pending |
+| ETA-01 | 7 | Pending |
+| ETA-02 | 7 | Pending |
+| ETA-03 | 7 | Pending |
+| ETA-04 | 7 | Pending |
+| ETA-05 | 7 | Pending |
+| ETA-06 | 7 | Pending |
+| ETA-07 | 7 | Pending |
+| ETA-08 | 7 | Pending |
+| ETA-09 | 7 | Pending |
+| RPT-01 | 8 | Pending |
+| RPT-02 | 8 | Pending |
+| RPT-03 | 8 | Pending |
+| RPT-04 | 8 | Pending |
+| RPT-05 | 8 | Pending |
+| RPT-06 | 8 | Pending |
+| UI-01 | 9 | Pending |
+| UI-02 | 9 | Pending |
+| UI-03 | 9 | Pending |
+| UI-04 | 9 | Pending |
+| UI-05 | 9 | Pending |
+| ACC-01 | 10 | Pending |
+| ACC-02 | 10 | Pending |
+| ACC-03 | 10 | Pending |
+| ACC-04 | 10 | Pending |
+| ACC-05 | 10 | Pending |
+| ACC-06 | 10 | Pending |
+| ACC-07 | 10 | Pending |
 
 **Coverage:**
 - v1 requirements: 48 total
-- Mapped to phases: 0
-- Unmapped: 48 (to be resolved by roadmap creation)
+- Mapped to phases: 48
+- Unmapped: 0
 
 ---
 
 *Requirements defined: 2026-10-26*
-*Last updated: 2026-10-26 after milestone v1.1 scope approval*
+*Last updated: 2026-10-26 after roadmap creation*

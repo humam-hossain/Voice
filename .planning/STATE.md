@@ -1,18 +1,18 @@
 ---
 gsd_state_version: "1.0"
-status: Awaiting next milestone
-stopped_at: Phase 05 complete — all phases complete
-last_updated: "2026-09-19T05:35:07.132Z"
-last_activity: 2026-09-19
-last_activity_desc: Milestone v1.0 completed and archived
-state_head: 3142192cd317cfbfc34190de2af3d6f4f1d68613
+status: planning
+stopped_at: Phase 6 not started — v1.1 roadmap created
+last_updated: "2026-10-25T18:20:29.000Z"
+last_activity: 2026-10-26
+last_activity_desc: Roadmap created for milestone v1.1 (Phases 6-10)
+state_head: c31e68246416c414b94742b0162cd391ad10b603
 progress:
   total_phases: 5
-  completed_phases: 1
-  total_plans: 10
-  completed_plans: 10
-  percent: 20
-current_phase: 05
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 06
 ---
 
 # Project State
@@ -22,36 +22,37 @@ current_phase: 05
 See: .planning/PROJECT.md (updated 2026-09-19)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Planning next milestone
+**Current focus:** Phase 6 — Foundations, Ledger & Status Contract
 
 ## Current Position
 
-Phase: Milestone v1.0 complete (shipped)
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-25 — Completed quick task 260925-qq7: Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details
+Phase: 6 of 10 (Foundations, Ledger & Status Contract) — v1.1 phase 1 of 5
+Plan: — (not planned)
+Status: Ready to plan
+Last activity: 2026-10-26 — Created the v1.1 roadmap; all 48 requirements mapped to Phases 6–10
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
-
-- Total plans completed: 10
-- Average duration: 0 min
-- Total execution time: 0.0 hours
+- v1.0 baseline: 10 plans across 5 phases (archived)
+- v1.1 plans completed: 0
+- Average duration: —
+- Total execution time (v1.1): 0.0 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 2 | - | - |
-| 02 | 2 | - | - |
-| 03 | 2 | - | - |
-| 04 | 2 | - | - |
-| 05 | 2 | - | - |
+| 06 | TBD | - | - |
+| 07 | TBD | - | - |
+| 08 | TBD | - | - |
+| 09 | TBD | - | - |
+| 10 | TBD | - | - |
 
 **Recent Trend:**
-
-- Last 5 plans: None
+- Last 5 plans: v1.0 archived
 - Trend: Not started
 
 *Updated after each plan completion*
@@ -60,15 +61,15 @@ Last activity: 2026-09-25 — Completed quick task 260925-qq7: Improve STT failu
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Full log in PROJECT.md Key Decisions table. Durable decisions for v1.1:
 
-- [Phase 4]: Hyprland native Lua keybindings (SUPER + SHIFT + M, SUPER + T) with GNU Stow symlink preservation
-- [Phase 4]: Multi-token atomic PID state tracking (starting -> recording -> transcribing -> idle) in recorder.pid
-- [Phase 4]: Suppress routine STT dictation toasts to prevent Wayland active window focus stealing before wtype typing
-- [Phase 3]: Offline Kokoro TTS asset pipeline with atomic download, size guards, and selection reading
-- [Phase 2]: Wayland keystroke injection via wtype without root daemon
-- [Phase 1]: uv virtual environment with Python 3.12 for AI runtime compatibility
+- [v1.1] ETA is one integer, no range; uncalibrated estimates use a `~` prefix; overrun clamps at `1s` then `Finishing…`.
+- [v1.1] `status.json` is advisory; the PID file remains the state authority; no new PID state strings.
+- [v1.1] Report ships before the clickable pill; click opens the pre-rendered local HTML report via `xdg-open`.
+- [v1.1] No new Python dependencies, no daemon, no model pre-warm; cold load is modeled, not removed.
+- [v1.1] No transcript text; character counts only, enforced by allowlist serialization.
+- [v1.1] Live QML lives in `/home/pera/github_repo/.dotfiles`; vendored reference copies live in `integrations/quickshell/`.
+- [v1.0] Hyprland Lua keybindings with Stow; atomic multi-token PID state; focus-safe notifications.
 
 ### Pending Todos
 
@@ -76,33 +77,23 @@ None yet.
 
 ### Blockers/Concerns
 
-None yet.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260919-lm1 | Add complete voice parameters and ranges list to README.md | 2026-09-19 | b3d4218 | [260919-lm1-add-complete-voice-parameters-and-ranges](./quick/260919-lm1-add-complete-voice-parameters-and-ranges/) |
-| 260919-m0b | Create issue.md to track missing download progress bar | 2026-09-19 | 8c324ce | [260919-m0b-create-issue-md-to-track-missing-downloa](./quick/260919-m0b-create-issue-md-to-track-missing-downloa/) |
-| 260925-qq7 | Improve STT failure diagnostics in notifications and logs with explicit failure stage and actionable model or transcription error details | 2026-09-25 | 06c542c | [260925-qq7-improve-stt-failure-diagnostics-in-notif](./quick/260925-qq7-improve-stt-failure-diagnostics-in-notif/) |
-| 261018-omu | Reduce max recording limit to 3 minutes and fix stuck keyboard keys on typing timeout | 2026-10-18 | d927d1f | [261018-omu-reduce-max-recording-limit-to-3-minutes-](./quick/261018-omu-reduce-max-recording-limit-to-3-minutes-/) |
-| 261018-pdy | Chunk audio recording into 3-min segments and sequentially transcribe on stop with error skipping | 2026-10-18 | cebd0fb | [261018-pdy-chunk-audio-recording-into-3-min-segment](./quick/261018-pdy-chunk-audio-recording-into-3-min-segment/) |
-| 261018-q8q | Add cancel keybind Super+Alt+M to cancel recording and replace mute | 2026-10-18 | e863ddc | [261018-q8q-add-cancel-keybind-super-alt-m-to-cancel](./quick/261018-q8q-add-cancel-keybind-super-alt-m-to-cancel/) |
+- [Phase 6] Largest phase: plan ~6 plans (imports → module primitives → atomic/single-writer/identity → terminal states → timing seam → prior-ETA wiring + test migration).
+- [Phase 9] External Quickshell/QML integration requires a UI-SPEC and coordination with the dotfiles repo; the vendored copy can drift silently.
+- [Phase 10] CUDA/AMD behavior is unverified on this machine; plan detection defensively and validate by replay.
 
 ## Deferred Items
 
-Items acknowledged and deferred at milestone close, most recent first:
-
 | Category | Item | Status | Deferred At | Milestone |
 |----------|------|--------|-------------|-----------|
-| *(none)* | | | | |
+| TTS estimation | TTS-01..03 (synthesis/playback ETA) | Deferred | 2026-10-26 | v1.2 |
+| Estimation quality | EST-01..04 (streaming, seeding, learned model, richer charts) | Deferred | 2026-10-26 | v1.1.x / v2 |
 
 ## Session Continuity
 
-Last session: 2026-09-19T03:43:11.424Z
-Stopped at: Phase 05 complete — all phases complete
-Resume file: .planning/phases/05-end-to-end-system-verification/05-CONTEXT.md
+Last session: 2026-10-26
+Stopped at: v1.1 roadmap created — Phase 6 ready to plan
+Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Plan Phase 6 with `/gsd-plan-phase 6`; run `/gsd-ui-phase 9` before Phase 9 implementation to settle palette, glyph, and width choices.
