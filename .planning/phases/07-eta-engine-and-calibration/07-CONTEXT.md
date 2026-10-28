@@ -13,43 +13,43 @@ This phase turns measured telemetry runs into a calibrated, honest, single-numbe
 ## Implementation Decisions
 
 ### Calibration storage & cache
-- **D7-01:** Calibrated parameters are stored in a dedicated atomic cache file `calibration.json`, updated by the worker at the end of each run. — **Reversibility:** reversible — cache can be deleted and rebuilt from ledger at any time.
-- **D7-02:** `calibration.json` lives persistently at `~/.local/state/voicemode/calibration.json` (via `get_metrics_dir()`), surviving reboots. Automatically rebuilt from `metrics.jsonl` if missing or invalid. — **Reversibility:** costly — changing the path after deployment means orphaning existing calibration data.
-- **D7-03:** `--reset-calibration` removes `calibration.json` and records a reset timestamp so earlier ledger rows are ignored during rebuilds, reverting to prior-based estimates without deleting ledger history.
-- **D7-04:** `calibration.json` is updated during worker finalization **after** text insertion is done, ensuring pasting is never delayed by calibration I/O.
-- **D7-05:** Per-key stats are comprehensive: rate (ratio of sums), finalize_s, load_s, sample_count, residuals window (last 20–30 prediction errors), and confidence score.
-- **D7-06:** All writes use atomic `tempfile + os.replace` with `0o600` permissions, matching the existing `atomic_write_json()` pattern. Readers never see torn JSON.
-- **D7-07:** Calibration uses incremental running accumulators (`sum_decode_s`, `sum_audio_s`, sample counts) for O(1) updates per run. Full rebuild from `metrics.jsonl` only if the file is missing.
-- **D7-08:** On missing or corrupted `calibration.json` during a status query, instantly fall back to shipped priors (zero latency). The worker rebuilds from `metrics.jsonl` during its next finalization.
+- **D-01:** Calibrated parameters are stored in a dedicated atomic cache file `calibration.json`, updated by the worker at the end of each run. — **Reversibility:** reversible — cache can be deleted and rebuilt from ledger at any time.
+- **D-02:** `calibration.json` lives persistently at `~/.local/state/voicemode/calibration.json` (via `get_metrics_dir()`), surviving reboots. Automatically rebuilt from `metrics.jsonl` if missing or invalid. — **Reversibility:** costly — changing the path after deployment means orphaning existing calibration data.
+- **D-03:** `--reset-calibration` removes `calibration.json` and records a reset timestamp so earlier ledger rows are ignored during rebuilds, reverting to prior-based estimates without deleting ledger history.
+- **D-04:** `calibration.json` is updated during worker finalization **after** text insertion is done, ensuring pasting is never delayed by calibration I/O.
+- **D-05:** Per-key stats are comprehensive: rate (ratio of sums), finalize_s, load_s, sample_count, residuals window (last 20–30 prediction errors), and confidence score.
+- **D-06:** All writes use atomic `tempfile + os.replace` with `0o600` permissions, matching the existing `atomic_write_json()` pattern. Readers never see torn JSON.
+- **D-07:** Calibration uses incremental running accumulators (`sum_decode_s`, `sum_audio_s`, sample counts) for O(1) updates per run. Full rebuild from `metrics.jsonl` only if the file is missing.
+- **D-08:** On missing or corrupted `calibration.json` during a status query, instantly fall back to shipped priors (zero latency). The worker rebuilds from `metrics.jsonl` during its next finalization.
 
 ### Mid-run revision sensitivity
-- **D7-09:** Upward revisions require both a ≥1.0 s jump AND ≥2.0 s elapsed since the prior revision — suppresses jittery flickers.
-- **D7-10:** Downward revisions step immediately to the lower integer estimate — strictly monotone non-increasing, truthfully reflects fast progress.
-- **D7-11:** `revision_count` and `last_revised_at` are exposed in `status.json`; total revisions and max upward jump are recorded in the ledger summary.
-- **D7-12:** Countdown dwells at `1s` for 1 full second, then transitions to `Finishing…` — natural pacing: `2s → 1s → Finishing…`.
-- **D7-13:** Remaining ETA is recalculated on each segment yielded by the Whisper transcription generator (immediate response to real decoding progress).
-- **D7-14:** Mid-run rate blends calibrated rate with this run's observed rate once ≥5 s of audio has decoded: `remaining = blended_rate × (total_audio - decoded_audio) + insert_s`.
-- **D7-15:** The `~` prefix persists across the entire countdown for uncalibrated runs (e.g. `~4s`, `~3s`, `~1s`) until `Finishing…` — uncalibrated confidence is honest throughout.
-- **D7-16:** Extended overrun stays on `Finishing…` continuously until text insertion begins; `status.json` marks `overrun: true`. No label escalation.
+- **D-09:** Upward revisions require both a ≥1.0 s jump AND ≥2.0 s elapsed since the prior revision — suppresses jittery flickers.
+- **D-10:** Downward revisions step immediately to the lower integer estimate — strictly monotone non-increasing, truthfully reflects fast progress.
+- **D-11:** `revision_count` and `last_revised_at` are exposed in `status.json`; total revisions and max upward jump are recorded in the ledger summary.
+- **D-12:** Countdown dwells at `1s` for 1 full second, then transitions to `Finishing…` — natural pacing: `2s → 1s → Finishing…`.
+- **D-13:** Remaining ETA is recalculated on each segment yielded by the Whisper transcription generator (immediate response to real decoding progress).
+- **D-14:** Mid-run rate blends calibrated rate with this run's observed rate once ≥5 s of audio has decoded: `remaining = blended_rate × (total_audio - decoded_audio) + insert_s`.
+- **D-15:** The `~` prefix persists across the entire countdown for uncalibrated runs (e.g. `~4s`, `~3s`, `~1s`) until `Finishing…` — uncalibrated confidence is honest throughout.
+- **D-16:** Extended overrun stays on `Finishing…` continuously until text insertion begins; `status.json` marks `overrun: true`. No label escalation.
 
 ### Cold start & early-load accounting
-- **D7-17:** Remaining model load in initial ETA: `remaining_load = max(0.0, estimated_load_s - elapsed_record_s)` — dynamic subtraction accounting for parallel loading during recording.
-- **D7-18:** Cold and warm load times are tracked separately; cold run decodes are excluded from fitting the steady-state transcription rate. — **Reversibility:** costly — changing the cold/warm boundary retroactively invalidates accumulated cold-run exclusion history.
-- **D7-19:** Cold run = first run after system boot only (not inactivity-based).
-- **D7-20:** Boot detection uses a `$XDG_RUNTIME_DIR/voice-stt/.boot_session` marker file — tmpfs clears automatically on every reboot; zero dependencies, instant check.
-- **D7-21:** Cold runs use shipped prior load time; warm runs use calibrated `load_s` from `calibration.json`.
-- **D7-22:** ETA is published in `status.json` immediately (<100 ms) when entering transcribing state — before model load completes — using priors or calibration. Revised on first segment yield.
-- **D7-23:** `eta_source` has 4 distinct values: `prior` (fresh install, no calibration data), `calibrated` (fitted from ledger history), `mid-run` (blended with this run's observed rate), `cold` (first-after-boot, using shipped prior with inflated load estimate). `cold` and `prior` use the same prior values but carry different diagnostic meaning.
+- **D-17:** Remaining model load in initial ETA: `remaining_load = max(0.0, estimated_load_s - elapsed_record_s)` — dynamic subtraction accounting for parallel loading during recording.
+- **D-18:** Cold and warm load times are tracked separately; cold run decodes are excluded from fitting the steady-state transcription rate. — **Reversibility:** costly — changing the cold/warm boundary retroactively invalidates accumulated cold-run exclusion history.
+- **D-19:** Cold run = first run after system boot only (not inactivity-based).
+- **D-20:** Boot detection uses a `$XDG_RUNTIME_DIR/voice-stt/.boot_session` marker file — tmpfs clears automatically on every reboot; zero dependencies, instant check.
+- **D-21:** Cold runs use shipped prior load time; warm runs use calibrated `load_s` from `calibration.json`.
+- **D-22:** ETA is published in `status.json` immediately (<100 ms) when entering transcribing state — before model load completes — using priors or calibration. Revised on first segment yield.
+- **D-23:** `eta_source` has 4 distinct values: `prior` (fresh install, no calibration data), `calibrated` (fitted from ledger history), `mid-run` (blended with this run's observed rate), `cold` (first-after-boot, using shipped prior with inflated load estimate). `cold` and `prior` use the same prior values but carry different diagnostic meaning.
 
 ### Key hierarchy & fallback shrinkage
-- **D7-24:** 4-level hierarchy: L0 (all 8 fields: model/device/compute_type/backend/beam_size/vad_filter/language/chunk_s) → L1 (drop chunk_s + vad_filter) → L2 (model/device/compute_type/backend only) → L3 (shipped prior). — **Reversibility:** costly — changing the hierarchy structure invalidates all per-level accumulators in calibration.json.
-- **D7-25:** Minimum 3 samples per level before trusting it (matches ETA-02); below 3, fall to the next broader level.
-- **D7-26:** Shrinkage blend: `weight = min(1.0, n_exact / 10.0)` → `result = weight × narrow_rate + (1 - weight) × broader_rate` — smoothly trusts the narrow key as samples accumulate.
-- **D7-27:** Rate statistic is ratio of sums (`Σdecode_s / Σaudio_s`) per ETA-01, **not** median of per-run rates. Outlier resistance is achieved via exclusion-before-accumulation rather than robust statistics on the rate itself. — **Reversibility:** costly — changing the rate statistic retroactively requires re-scanning the full ledger to rebuild accumulators.
-- **D7-28:** Confidence = `1.0 - MAD/median_residual` clamped [0.0, 1.0], computed on a residuals window (last 20–30 prediction errors). MAD is used for confidence scoring only, not for rate fitting.
-- **D7-29:** Per-level accumulators are stored in `calibration.json` so each level's stats are always available for instant lookup and shrinkage blending.
-- **D7-30:** The resolved key level (L0/L1/L2/L3), sample count, and confidence are recorded in both `status.json` and the ledger row.
-- **D7-31:** Exclusions from fitting: `outcome ≠ success`, GPU→CPU fallback, cold runs, `load_ms > 3× calibrated load` (contention proxy), outliers (rate outside [0.01, 10.0]).
+- **D-24:** 4-level hierarchy: L0 (all 8 fields: model/device/compute_type/backend/beam_size/vad_filter/language/chunk_s) → L1 (drop chunk_s + vad_filter) → L2 (model/device/compute_type/backend only) → L3 (shipped prior). — **Reversibility:** costly — changing the hierarchy structure invalidates all per-level accumulators in calibration.json.
+- **D-25:** Minimum 3 samples per level before trusting it (matches ETA-02); below 3, fall to the next broader level.
+- **D-26:** Shrinkage blend: `weight = min(1.0, n_exact / 10.0)` → `result = weight × narrow_rate + (1 - weight) × broader_rate` — smoothly trusts the narrow key as samples accumulate.
+- **D-27:** Rate statistic is ratio of sums (`Σdecode_s / Σaudio_s`) per ETA-01, **not** median of per-run rates. Outlier resistance is achieved via exclusion-before-accumulation rather than robust statistics on the rate itself. — **Reversibility:** costly — changing the rate statistic retroactively requires re-scanning the full ledger to rebuild accumulators.
+- **D-28:** Confidence = `1.0 - MAD/median_residual` clamped [0.0, 1.0], computed on a residuals window (last 20–30 prediction errors). MAD is used for confidence scoring only, not for rate fitting.
+- **D-29:** Per-level accumulators are stored in `calibration.json` so each level's stats are always available for instant lookup and shrinkage blending.
+- **D-30:** The resolved key level (L0/L1/L2/L3), sample count, and confidence are recorded in both `status.json` and the ledger row.
+- **D-31:** Exclusions from fitting: `outcome ≠ success`, GPU→CPU fallback, cold runs, `load_ms > 3× calibrated load` (contention proxy), outliers (rate outside [0.01, 10.0]).
 
 ### Resolved conflicts
 - **D7-C1:** Ratio of sums wins over median of per-run rates for fitting (ETA-01 compliance). MAD/median used only on prediction residuals for confidence, not for rate fitting.
