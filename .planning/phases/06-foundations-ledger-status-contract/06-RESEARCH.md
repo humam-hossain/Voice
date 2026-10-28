@@ -304,30 +304,35 @@ def transcribe_with_timing(model, wav_path, args):
 
 ## Open Questions
 
-1. **Module structure**
+1. **Module structure — (RESOLVED)**
    - What we know: Need to add `voicemode_telemetry.py`. Can modify `voice.py`.
    - What's unclear: Exact API design between modules.
    - Recommendation: Design clean interfaces, keep telemetry logic isolated.
+   - Resolution: `voicemode_telemetry.py` owns every file primitive (`atomic_write_*`, PID helpers, `build_record`/`validate_record`, `build_status`/`validate_status`, `publish_status`/`read_status`/`remove_status`, `get_install_id`). `voice.py` keeps orchestration and calls those names at module scope so tests can patch them. Test coverage lives in `tests/test_telemetry.py`, `tests/test_status_contract.py`, and `tests/test_pid_race.py` (plans 06-01…06-04).
 
-2. **Early model loading timing**
-   - What we know: Load before/during recording start (D-05). 
+2. **Early model loading timing — (RESOLVED, corrected to D-05)**
+   - What we know: Load before/during recording start (D-05).
    - What's unclear: Exact placement - in worker before starting recorder? In parallel thread?
    - Recommendation: Load model after entering worker but before `recorder.start()`, or in parallel thread while setting up. Need to ensure model is ready when chunks come in.
+   - Resolution: Load in the consumer **daemon thread started immediately after `recorder.start()`**, not before `recorder.start()` and not on the main thread. The main thread must keep capturing while the cold load overlaps speech; the consumer publishes `state="recording", phase="load"` before the load and only switches to `state="transcribing"` after `capture_closed` is set (plan 06-05, Task 2). Starting the consumer earlier would race the `recording` status transition.
 
-3. **Incremental transcription integration**
+3. **Incremental transcription integration — (RESOLVED)**
    - What we know: Transcribe completed chunks as written while recording continues.
    - What's unclear: How Recorder signals chunk completion - currently writes async in threads and appends to `self._chunk_paths`. Need to hook into this.
    - Recommendation: Extend Recorder to allow callback on chunk completion, or have worker poll/watch chunk files.
+   - Resolution: `Recorder.on_chunk_ready(idx, path, audio_s)` is invoked from `_write_chunk_async` outside `self._lock`, carrying the per-chunk duration computed at write time. The worker enqueues into a `queue.Queue` consumer; `stop_to_wav` does **not** invoke the callback, so the worker enqueues the final chunk itself from its return value (deduped by index). All text is buffered and inserted once at the end (plan 06-05, Task 2).
 
-4. **Status.json heartbeat**
+4. **Status.json heartbeat — (RESOLVED)**
    - What we know: Write every 5s while recording (D-03), on transitions otherwise.
    - What's unclear: Exact schema details beyond what's specified.
    - Recommendation: Follow STS-02 schema exactly as specified.
+   - Resolution: The 17-key schema is frozen in `voicemode_telemetry.STATUS_V1_KEYS` with a 1024-byte ceiling and `validate_status` on every write. `STATUS_HEARTBEAT_S = 5.0`, `STATUS_TTL_S = 30.0`; the recording loop uses a separate `next_status_at` monotonic deadline so heartbeats do not disturb the reminder cadence (plan 06-04, Task 2).
 
-5. **Terminal outcome on all exits**
+5. **Terminal outcome on all exits — (RESOLVED)**
    - What we know: Every abnormal exit ends in terminal outcome, SIGKILL detected by expiry.
    - What's unclear: How to detect SIGKILL vs clean exit?
    - Recommendation: On normal exit paths write terminal ledger row. On crash/SIGKILL, PID expires - need expiry mechanism in status.json and/or detection logic.
+   - Resolution: A single guarded `finalize_background_run(run_state, ...)` writes the one terminal row for success/cancel/error/watchdog_timeout; the watchdog finalizes before `os._exit(1)`. A SIGKILL/power-cut leaves an unexpired `status.json`; the next invocation's `reconcile_abandoned_run()` (inside the toggle flock) writes one `abandoned` row from the snapshot and clears both files. Expired snapshots are cleared without a row, and cleanup is guarded by `run_id` so a successor run is never touched (plans 06-05/06-06).
 
 ## Environment Availability
 
@@ -351,23 +356,23 @@ def transcribe_with_timing(model, wav_path, args):
 |----------|-------|
 | Framework | unittest (stdlib) + existing tests |
 | Config file | none |
-| Quick run command | `python -m pytest tests/ -v` or `python -m unittest discover tests/` |
-| Full suite command | `python -m pytest tests/ -v` |
+| Quick run command | `.venv/bin/python -m unittest discover -s tests` |
+| Full suite command | `.venv/bin/python -m unittest discover -s tests` |
 
 ### Phase Requirements → Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| FND-01 | Non-transcription commands import-light, --status <100ms warm | unit/integration | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| FND-02 | PID state written atomically, no torn reads | unit | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| FND-03 | Two rapid toggles -> one worker, flock, re-verify | unit/integration | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| FND-04 | Every exit writes terminal ledger row, clear status/PID | integration | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| FND-05 | No new PID state strings | unit | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| LED-01-07 | Ledger schema v1, privacy, kill switch, permissions | unit | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| DEC-01-04 | Timing semantics, generator consumption, clocks | unit | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
-| STS-01-05 | status.json atomic, schema, authority, expiry | unit | `python -m pytest tests/test_*.py -v` | ⚠️ Need new tests |
+| FND-01 | Non-transcription commands import-light, --status <100ms warm | unit/integration | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| FND-02 | PID state written atomically, no torn reads | unit | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| FND-03 | Two rapid toggles -> one worker, flock, re-verify | unit/integration | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| FND-04 | Every exit writes terminal ledger row, clear status/PID | integration | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| FND-05 | No new PID state strings | unit | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| LED-01-07 | Ledger schema v1, privacy, kill switch, permissions | unit | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| DEC-01-04 | Timing semantics, generator consumption, clocks | unit | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
+| STS-01-05 | status.json atomic, schema, authority, expiry | unit | `.venv/bin/python -m unittest discover -s tests` | ⚠️ Need new tests |
 
 ### Sampling Rate
-- **Per task commit:** `python -m pytest tests/ -v` (quick)
+- **Per task commit:** `.venv/bin/python -m unittest discover -s tests` (quick)
 - **Per wave merge:** Full suite
 - **Phase gate:** Full suite green before verification
 
