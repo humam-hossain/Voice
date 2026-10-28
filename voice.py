@@ -37,9 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import numpy as np
-import sounddevice as sd
-from faster_whisper import WhisperModel
+import voicemode_telemetry
 
 CTRL_B = "\x02"
 APP_NAME = "Voice STT"
@@ -181,7 +179,8 @@ class Recorder:
     def recording(self) -> bool:
         return self.stream is not None
 
-    def _write_chunk_file(self, audio: np.ndarray, idx: int, save_dir: Optional[Path]) -> Path:
+    def _write_chunk_file(self, audio, idx: int, save_dir: Optional[Path]) -> Path:
+        import numpy as np
         if self.actual_sample_rate != self.target_sample_rate:
             audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
         pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
@@ -212,6 +211,7 @@ class Recorder:
             print(f"Error writing audio chunk {idx}: {exc}", file=sys.stderr, flush=True)
 
     def _callback(self, indata, frames, time_info, status) -> None:
+        import numpy as np
         if status:
             self.statuses.append(str(status))
         data = indata.copy()
@@ -235,6 +235,8 @@ class Recorder:
                 t.start()
 
     def start(self) -> None:
+        import numpy as np
+        import sounddevice as sd
         self.frames = []
         self.statuses = []
         self._current_frames = []
@@ -275,6 +277,7 @@ class Recorder:
         self.started_at = time.monotonic()
 
     def stop_to_wav(self, save_dir: Optional[Path] = None) -> tuple[list[Path], float, bool]:
+        import numpy as np
         if self.stream is None or self.started_at is None:
             raise RuntimeError("recording is not active")
 
@@ -301,6 +304,7 @@ class Recorder:
 
         if remaining:
             try:
+                import numpy as np
                 final_audio = np.concatenate(remaining, axis=0)
                 final_path = self._write_chunk_file(final_audio, final_idx, effective_save_dir)
                 with self._lock:
@@ -796,32 +800,27 @@ def report_stt_failure(
         )
 
 
-def read_pid_state(path: Path = PID_FILE) -> tuple[int | None, str]:
-    try:
-        content = path.read_text(encoding="utf-8").strip()
-        if not content:
-            return None, "idle"
-        parts = content.split()
-        if not parts:
-            return None, "idle"
-        pid = int(parts[0])
-        state = parts[1] if len(parts) > 1 else "recording"
-        return pid, state
-    except (FileNotFoundError, ValueError, OSError):
-        return None, "idle"
+def read_pid_state(path: Path | None = None) -> tuple[int | None, str]:
+    if path is None:
+        path = PID_FILE
+    return voicemode_telemetry.read_pid_state(path)
 
 
-def read_pid(path: Path = PID_FILE) -> int | None:
-    pid, _ = read_pid_state(path)
-    return pid
+def read_pid(path: Path | None = None) -> int | None:
+    if path is None:
+        path = PID_FILE
+    return voicemode_telemetry.read_pid(path)
 
 
-def write_pid_state(pid: int, state: str, path: Path = PID_FILE) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{pid} {state}\n", encoding="utf-8")
+def write_pid_state(pid: int, state: str, path: Path | None = None) -> None:
+    if path is None:
+        path = PID_FILE
+    voicemode_telemetry.write_pid_state(pid, state, path)
 
 
-def write_pid(path: Path = PID_FILE) -> None:
+def write_pid(path: Path | None = None) -> None:
+    if path is None:
+        path = PID_FILE
     write_pid_state(os.getpid(), "recording", path)
 
 
@@ -847,14 +846,10 @@ def process_alive(pid: int) -> bool:
         return False
 
 
-def remove_pid(pid: int | None = None, path: Path = PID_FILE) -> None:
-    current = read_pid(path)
-    if pid is not None and current not in (None, pid):
-        return
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+def remove_pid(pid: int | None = None, path: Path | None = None) -> None:
+    if path is None:
+        path = PID_FILE
+    voicemode_telemetry.remove_pid(pid, path)
 
 
 def cancel_active_stt() -> None:
@@ -1712,6 +1707,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
     pid = os.getpid()
     recorder: Recorder | None = None
     active_stage = "microphone setup"
+    run_id = uuid.uuid4().hex
+    ts_start = time.time()
+    t_start = time.monotonic()
+    text = ""
+    outcome = "success"
 
     def handle_usr1(signum, frame) -> None:
         nonlocal stop_requested
@@ -1723,6 +1723,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
     wav_paths: list[Path] = []
     should_delete = False
+    duration = 0.0
+    total_chunks = 0
     try:
         input_device = parse_device(args.input_device)
         sample_rate = resolve_sample_rate(input_device, args.sample_rate)
@@ -1769,6 +1771,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
         if cancel_requested:
             print("Recording cancelled by signal.", flush=True)
+            outcome = "cancelled"
             return 0
 
         write_pid_state(pid, "transcribing")
@@ -1779,6 +1782,24 @@ def run_background_recording(args: argparse.Namespace) -> int:
         total_chunks = len(wav_paths)
         chunk_str = f"{total_chunks} segment" if total_chunks == 1 else f"{total_chunks} segments"
         print(f"Stopped ({duration:.1f}s, {chunk_str}). Transcribing...", flush=True)
+        if voicemode_telemetry.get_metrics_enabled():
+            voicemode_telemetry.publish_status({
+                "pid": pid,
+                "run_id": run_id,
+                "state": "transcribing",
+                "phase": "finalize",
+                "started_at": ts_start,
+                "expires_at": time.time() + 30.0,
+                "audio_s": round(duration, 3),
+                "segments": total_chunks,
+                "segments_done": 0,
+                "eta_epoch": None,
+                "eta_remaining_s": None,
+                "eta_confidence": "low",
+                "eta_source": "prior",
+                "overrun": False,
+                "report_path": None,
+            })
 
         active_stage = "Whisper model loading"
         model_state = load_model(args)
@@ -1841,11 +1862,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
             notify(APP_NAME, "No speech detected.", args)
         return 0
     except STTStageFailure as exc:
+        outcome = "error"
         play_cue(args, "error")
         report_stt_failure(exc.stage, exc.error, args, previous_failures=exc.previous_failures)
         print(f"voice background error during {exc.stage}: {type(exc.error).__name__}", file=sys.stderr, flush=True)
         return 1
     except Exception as exc:
+        outcome = "error"
         play_cue(args, "error")
         report_stt_failure(active_stage, exc, args)
         print(f"voice background error during {active_stage}: {type(exc).__name__}", file=sys.stderr, flush=True)
@@ -1863,6 +1886,45 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 except OSError:
                     pass
         remove_pid(pid)
+        try:
+            voicemode_telemetry.remove_status()
+        except Exception:
+            pass
+        try:
+            if voicemode_telemetry.get_metrics_enabled():
+                def chunk_seconds_fn(args_ns):
+                    try:
+                        return float(getattr(args_ns, "chunk_seconds", DEFAULT_CHUNK_SECONDS))
+                    except Exception:
+                        return float(DEFAULT_CHUNK_SECONDS)
+                config = {
+                    "model": getattr(args, "model", None),
+                    "device": getattr(args, "device", None),
+                    "compute_type": getattr(args, "compute_type", None),
+                    "beam_size": getattr(args, "beam_size", None),
+                    "vad_filter": getattr(args, "vad_filter", None),
+                    "language": getattr(args, "language", None),
+                    "chunk_s": chunk_seconds_fn(args),
+                }
+                voicemode_telemetry.append_ledger_row({
+                    "schema": 1,
+                    "source": "stt",
+                    "run_id": run_id,
+                    "ts_start": ts_start,
+                    "ts_end": time.time(),
+                    "outcome": outcome,
+                    "error_stage": None,
+                    "actual": {"total_ms": round((time.monotonic() - t_start) * 1000, 3)},
+                    "chars_out": len(text) if text else 0,
+                    "chars_typed": 0,
+                    "segments": [],
+                    "config": config,
+                    "backend": None,
+                    "predicted": {},
+                    "tts": {},
+                })
+        except Exception:
+            pass
 
 
 def parse_gsettings_list(raw: str) -> list[str]:

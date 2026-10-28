@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": null,
+  "milestone": "v1.1 — Latency Prediction & Telemetry",
   "phases": [
     {
       "number": "1",
@@ -27,12 +27,37 @@
       "number": "5",
       "name": "End-to-End System Verification",
       "status": "complete"
+    },
+    {
+      "number": "6",
+      "name": "Foundations, Ledger & Status Contract",
+      "status": "pending"
+    },
+    {
+      "number": "7",
+      "name": "ETA Engine & Calibration",
+      "status": "pending"
+    },
+    {
+      "number": "8",
+      "name": "Accuracy Report & Click-Through",
+      "status": "pending"
+    },
+    {
+      "number": "9",
+      "name": "Quickshell ETA Integration",
+      "status": "pending"
+    },
+    {
+      "number": "10",
+      "name": "Accuracy Loop, Portability & Hardening",
+      "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 06 of 5 · 0% · executing"
   },
-  "updated_at": "2026-09-19T05:35:07.144Z"
+  "updated_at": "2026-10-28T14:00:58.170Z"
 }

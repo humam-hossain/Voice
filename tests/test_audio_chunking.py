@@ -11,15 +11,18 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 import voice
+from _hermetic import TempXdgTestCase
 
 
-class TestAudioChunking(unittest.TestCase):
+class TestAudioChunking(TempXdgTestCase):
     def setUp(self) -> None:
+        super().setUp()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.test_dir = Path(self.temp_dir.name)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        super().tearDown()
 
     def test_chunk_seconds_resolution(self) -> None:
         # Default

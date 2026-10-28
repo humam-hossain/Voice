@@ -12,9 +12,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import voice
+from _hermetic import TempXdgTestCase, advancing_monotonic
 
 
-class TestHyprlandKeybindInstallation(unittest.TestCase):
+class TestHyprlandKeybindInstallation(TempXdgTestCase):
     """Test suite covering Hyprland Lua keybinding generation, installation, and auto-detection."""
 
     def test_generate_hyprland_block_format(self) -> None:
@@ -187,7 +188,7 @@ class TestHyprlandKeybindInstallation(unittest.TestCase):
                 mock_hypr.assert_not_called()
 
 
-class TestDaemonLifecycleStates(unittest.TestCase):
+class TestDaemonLifecycleStates(TempXdgTestCase):
     """Test suite covering PID state tracking, aliveness verification, signal handling, and mutual exclusion."""
 
     def test_write_and_read_pid_state(self) -> None:
@@ -438,7 +439,7 @@ class TestDaemonLifecycleStates(unittest.TestCase):
         mock_timer.cancel.assert_called_once()
 
 
-class TestDesktopNotificationBehavior(unittest.TestCase):
+class TestDesktopNotificationBehavior(TempXdgTestCase):
     """Test suite covering focus-safe notification rules, urgency flags, and cue intervals."""
 
     def test_stt_failure_notification_includes_bounded_recovery_path(self) -> None:
@@ -548,7 +549,7 @@ class TestDesktopNotificationBehavior(unittest.TestCase):
              patch("voice.transcribe", return_value=("", MagicMock())), \
              patch("voice.max_recording_seconds", return_value=0.01), \
              patch("voice.notify") as mock_notify:
-            with patch("time.monotonic", side_effect=[1000.0, 1000.0, 1000.02, 1000.02, 1000.02]):
+            with patch("time.monotonic", advancing_monotonic(1000.0, 0.01)):
                 voice.run_background_recording(args)
                 notified_messages = [call[0][1] for call in mock_notify.call_args_list]
                 self.assertTrue(any("Max recording duration" in m for m in notified_messages))
