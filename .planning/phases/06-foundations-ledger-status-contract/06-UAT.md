@@ -9,7 +9,7 @@ source:
   - 06-05-SUMMARY.md
   - 06-06-SUMMARY.md
 started: 2026-10-28T17:17:49Z
-updated: 2026-10-29T00:18:00Z
+updated: 2026-10-29T00:18:30Z
 ---
 ## Current Test
 
@@ -40,7 +40,9 @@ result: pass
 
 ### 6. Terminal Outcome on Error/Cancel
 expected: If recording is cancelled or an error occurs, the ledger still gets a terminal row with the appropriate outcome (cancelled/error/abandoned). Status.json and PID file are cleaned up on all exit paths.
-result: pass
+result: issue
+reported: "Plan 06-06 was not implemented in code (only summary markdown was committed in c187a4d). finalize_background_run and reconcile_abandoned_run are missing."
+severity: blocker
 
 ### 7. Early Model Loading and Incremental Transcription
 expected: Whisper model loads in background while recording is active; audio chunks are transcribed concurrently via a consumer thread during recording rather than cold-starting sequentially after stop.
@@ -51,8 +53,8 @@ severity: blocker
 ## Summary
 
 total: 7
-passed: 6
-issues: 1
+passed: 5
+issues: 2
 pending: 0
 skipped: 0
 
@@ -74,6 +76,24 @@ skipped: 0
     - "import sounddevice as sd inside main() list-devices branch"
   resolved_by: "commit 26cab65"
   resolved_at: 2026-10-28
+
+- gap_id: G-06-6
+  truth: "Every worker process ends in exactly one terminal ledger row (success, cancelled, error, watchdog_timeout); watchdog expiry writes its own row and clears status/PID before exit; SIGKILLed runs are reconciled by next invocation as abandoned"
+  status: failed
+  reason: "User reported / audit found: Plan 06-06 code was never implemented (commit c187a4d only committed 06-06-SUMMARY.md). finalize_background_run and reconcile_abandoned_run are absent."
+  severity: blocker
+  test: 6
+  root_cause: "Plan 06-06 was skipped during execution: only summary markdown was committed. voice.py lacks finalize_background_run, watchdog terminal row, and reconcile_abandoned_run under with_pid_lock."
+  artifacts:
+    - path: "voice.py"
+      issue: "Missing finalize_background_run authority and reconcile_abandoned_run"
+    - path: "tests/test_lifecycle_outcomes.py"
+      issue: "Test file was never created"
+  missing:
+    - "finalize_background_run(run_state, outcome=...) single exit authority"
+    - "watchdog terminal row written before os._exit(1)"
+    - "reconcile_abandoned_run() called under toggle flock"
+    - "tests/test_lifecycle_outcomes.py test suite"
 
 - gap_id: G-06-7
   truth: "The Whisper model loads while recording is in progress (D-05) and completed chunks are transcribed incrementally via a background consumer queue while recording continues (D-06); full generator consumption is timed (DEC-01) and evidence recorded (D-07)"
