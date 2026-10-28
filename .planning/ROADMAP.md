@@ -86,7 +86,7 @@ Plans:
   4. After 20 runs on this machine, the ETA's median absolute error against "text begins inserting" is at or below 20%, while failed, fallback, cold, contended, and outlier runs are excluded from fitting but kept in the ledger.
   5. `--status --json` exposes state, phase, ETA, source, and confidence; `--reset-calibration` returns the estimator to prior-based numbers; `VOICE_ETA=off` hides the ETA without affecting transcription.
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -95,7 +95,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 07-02-PLAN.md — Mid-Run Correction & Display Rules
+- [x] 07-02-PLAN.md — Mid-Run Correction & Display Rules
 
 **Wave 3** *(blocked on Wave 1,2)*
 
@@ -160,7 +160,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 4. Hyprland Integration & Daemon Lifecycle | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 5. End-to-End System Verification | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
-| 7. ETA Engine & Calibration | v1.1 | 1/3 | In Progress|  |
+| 7. ETA Engine & Calibration | v1.1 | 2/3 | In Progress|  |
 | 8. Accuracy Report & Click-Through | v1.1 | 0/0 | Not started | - |
 | 9. Quickshell ETA Integration | v1.1 | 0/0 | Not started | - |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |
