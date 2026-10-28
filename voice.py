@@ -702,6 +702,71 @@ class TranscriptionEvidence:
     audio_s: Optional[float] = None
 
 
+def update_midrun_eta(
+    new_raw_eta: float,
+    current_eta: Optional[float | int],
+    last_revised_at: Optional[float],
+    now: float,
+) -> tuple[int, bool, float]:
+    """Asymmetric revision hysteresis: immediate downward integer steps; upward jumps require >= 1.0s and >= 2.0s elapsed."""
+    new_int = max(1, int(math.ceil(new_raw_eta)))
+    if current_eta is None:
+        return new_int, True, 0.0
+    curr_int = int(current_eta)
+    if new_int < curr_int:
+        return new_int, True, 0.0
+    delta = new_raw_eta - float(curr_int)
+    time_since = now - (last_revised_at or 0.0)
+    if delta >= 1.0 and time_since >= 2.0:
+        return new_int, True, delta
+    return curr_int, False, 0.0
+
+
+def format_eta_pill(
+    eta_remaining_s: Optional[float | int],
+    eta_source: Optional[str] = None,
+    overrun: bool = False,
+) -> str:
+    """Formats ETA pill display with persistent '~' for prior/cold sources, and 'Finishing…' on overrun."""
+    if overrun:
+        return "Finishing…"
+    if eta_remaining_s is None:
+        return ""
+    prefix = "~" if eta_source in ("prior", "cold") else ""
+    return f"{prefix}{int(eta_remaining_s)}s"
+
+
+def calculate_countdown_display(
+    remaining_raw: float,
+    dwell_t0: Optional[float],
+    now: float,
+    eta_source: Optional[str] = None,
+) -> dict:
+    """Manages 1s dwell for 1.0s then transitions to Finishing… with overrun=True."""
+    if remaining_raw <= 1.0:
+        if dwell_t0 is None:
+            dwell_t0 = now
+        elapsed = now - dwell_t0
+        if elapsed < 1.0:
+            display_s = 1
+            overrun = False
+        else:
+            display_s = 0
+            overrun = True
+    else:
+        display_s = max(1, int(math.ceil(remaining_raw)))
+        overrun = False
+        dwell_t0 = None
+
+    label = format_eta_pill(display_s, eta_source=eta_source, overrun=overrun)
+    return {
+        "display_s": display_s,
+        "overrun": overrun,
+        "dwell_t0": dwell_t0,
+        "label": label,
+    }
+
+
 def transcribe_timed(
     model_state: ModelState,
     wav_path: Path,
@@ -709,6 +774,7 @@ def transcribe_timed(
     *,
     initial_prompt: Optional[str] = None,
     audio_s: Optional[float] = None,
+    on_segment_yield: Optional[Callable[[float, float, float], None]] = None,
 ) -> TranscriptionEvidence:
     kwargs: dict[str, Any] = {
         "beam_size": getattr(args, "beam_size", 5),
@@ -722,7 +788,23 @@ def transcribe_timed(
     def _decode(state: ModelState):
         t0 = time.monotonic()
         raw_segments, info = state.model.transcribe(str(wav_path), **kwargs)
-        segments = list(raw_segments)
+        segments = []
+        decoded_audio_s = 0.0
+        total_audio = audio_s
+        if total_audio is None and info is not None:
+            total_audio = getattr(info, "duration", None)
+        for seg in raw_segments:
+            segments.append(seg)
+            seg_start = getattr(seg, "start", 0.0) or 0.0
+            seg_end = getattr(seg, "end", 0.0) or 0.0
+            seg_dur = max(0.0, float(seg_end - seg_start))
+            decoded_audio_s += seg_dur
+            if on_segment_yield:
+                try:
+                    tot = total_audio if total_audio is not None else (getattr(info, "duration", None) or decoded_audio_s)
+                    on_segment_yield(decoded_audio_s, tot, time.monotonic() - t0)
+                except Exception:
+                    pass
         decode_ms = round((time.monotonic() - t0) * 1000.0, 3)
         return segments, info, decode_ms
 
@@ -2151,13 +2233,18 @@ def run_background_recording(args: argparse.Namespace) -> int:
         },
     }
 
-    def _compute_eta(audio_s, model=None, backend=None, config=None):
+    def _compute_eta(audio_s, model=None, backend=None, config=None, elapsed_record_s=0.0, is_cold=False):
         try:
             if os.getenv("VOICE_ETA", "").strip().lower() in {"0", "false", "no", "off"}:
                 return None, None, None, None, None
             try:
                 eta_s, src, key_level, n, conf = voicemode_telemetry.calibrated_eta_seconds(
-                    audio_s, model=model, backend=backend, config=config
+                    audio_s,
+                    model=model,
+                    backend=backend,
+                    config=config,
+                    elapsed_record_s=elapsed_record_s,
+                    is_cold=is_cold,
                 )
             except Exception:
                 eta_s = voicemode_telemetry.prior_eta_seconds(audio_s, model)
@@ -2184,8 +2271,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
                         pred["shown_s"] = rem
                         pred["shown_at_epoch"] = s.get("updated_at") or time.time()
                         pred["source"] = s.get("eta_source")
-                        pred["key_level"] = s.get("eta_key_level")
-                        pred["n"] = s.get("eta_n")
+                        pred["key_level"] = s.get("key_level") or s.get("eta_key_level")
+                        pred["n"] = s.get("key_n") or s.get("eta_n")
                         pred["confidence"] = s.get("eta_confidence")
                     else:
                         pred["revisions"] = (pred.get("revisions") or 0) + 1
@@ -2229,6 +2316,82 @@ def run_background_recording(args: argparse.Namespace) -> int:
         last_success_text = ""
         timeout_seconds = stt_timeout_seconds()
 
+        midrun_state = {
+            "current_eta": None,
+            "last_revised_at": None,
+            "revision_count": 0,
+            "max_upward_jump_s": 0.0,
+            "dwell_t0": None,
+        }
+
+        def _on_segment_yield(decoded_audio_s: float, total_audio_s: float, elapsed_decode_s: float) -> None:
+            try:
+                model_str = str(getattr(args, "model", "medium")).lower()
+                prefix = model_str.split(".")[0].split("-")[0]
+                prior_rtf = voicemode_telemetry.PRIOR_RTF.get(prefix, voicemode_telemetry.PRIOR_RTF["medium"])
+                cal = voicemode_telemetry.load_calibration()
+                b = loader_state.get("backend") or actual_backend(model_holder["state"].model)
+                keys = voicemode_telemetry.extract_hierarchy_keys(vars(args) if hasattr(args, "__dict__") else {}, b)
+                initial_rate, chosen_lvl, chosen_n = voicemode_telemetry.resolve_calibrated_rate(
+                    keys, cal.get("accumulators", {}), prior_rtf
+                )
+
+                if decoded_audio_s < 5.0:
+                    remaining_s = initial_rate * max(0.0, total_audio_s - decoded_audio_s) + voicemode_telemetry.PRIOR_INSERT_S
+                    eta_src = "calibrated" if chosen_lvl in ("L0", "L1", "L2") else "prior"
+                else:
+                    alpha = min(1.0, decoded_audio_s / 30.0)
+                    observed_rate = max(0.01, min(10.0, elapsed_decode_s / decoded_audio_s))
+                    blended_rate = (1.0 - alpha) * initial_rate + alpha * observed_rate
+                    remaining_s = blended_rate * max(0.0, total_audio_s - decoded_audio_s) + voicemode_telemetry.PRIOR_INSERT_S
+                    eta_src = "mid-run"
+
+                now = time.monotonic()
+                if midrun_state["current_eta"] is None:
+                    with status_lock:
+                        midrun_state["current_eta"] = status_state.get("eta_remaining_s")
+                    midrun_state["last_revised_at"] = now
+
+                new_int, is_revised, jump = update_midrun_eta(
+                    remaining_s,
+                    midrun_state["current_eta"],
+                    midrun_state["last_revised_at"],
+                    now,
+                )
+                if is_revised:
+                    midrun_state["current_eta"] = new_int
+                    midrun_state["last_revised_at"] = now
+                    midrun_state["revision_count"] += 1
+                    if jump > midrun_state["max_upward_jump_s"]:
+                        midrun_state["max_upward_jump_s"] = jump
+
+                disp = calculate_countdown_display(
+                    float(midrun_state["current_eta"] if midrun_state["current_eta"] is not None else remaining_s),
+                    midrun_state["dwell_t0"],
+                    now,
+                    eta_source=eta_src,
+                )
+                midrun_state["dwell_t0"] = disp["dwell_t0"]
+
+                tot = total_chunks_holder.get("n") or 1
+                with results_lock:
+                    done = len(results)
+                _publish_status(
+                    "transcribing",
+                    "decode",
+                    segments=tot,
+                    segments_done=done,
+                    eta_remaining_s=disp["display_s"],
+                    eta_source=eta_src,
+                    overrun=disp["overrun"],
+                    revision_count=midrun_state["revision_count"],
+                    last_revised_at=midrun_state["last_revised_at"],
+                    key_level=chosen_lvl,
+                    key_n=chosen_n,
+                )
+            except Exception:
+                pass
+
         while True:
             item = chunk_queue.get()
             if item is None:
@@ -2245,13 +2408,26 @@ def run_background_recording(args: argparse.Namespace) -> int:
             watchdog.start()
             try:
                 initial_prompt = last_success_text[-200:] if last_success_text else None
-                ev = transcribe_timed(
-                    model_holder["state"],
-                    chunk_path,
-                    args,
-                    initial_prompt=initial_prompt,
-                    audio_s=audio_s,
-                )
+                try:
+                    ev = transcribe_timed(
+                        model_holder["state"],
+                        chunk_path,
+                        args,
+                        initial_prompt=initial_prompt,
+                        audio_s=audio_s,
+                        on_segment_yield=_on_segment_yield,
+                    )
+                except TypeError as te:
+                    if "on_segment_yield" in str(te):
+                        ev = transcribe_timed(
+                            model_holder["state"],
+                            chunk_path,
+                            args,
+                            initial_prompt=initial_prompt,
+                            audio_s=audio_s,
+                        )
+                    else:
+                        raise
                 with results_lock:
                     results[idx] = ev
                 if ev.fallback:
@@ -2297,6 +2473,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 tot = total_chunks_holder["n"] or max(done, 1)
                 _publish_status("transcribing", "decode", segments=tot, segments_done=done)
 
+        pred = run_state.get("predicted")
+        if pred and isinstance(pred, dict):
+            pred["revisions"] = midrun_state["revision_count"]
+            pred["max_upward_jump_s"] = round(midrun_state["max_upward_jump_s"], 3)
+
     wav_paths: list[Path] = []
     should_delete = False
     duration = 0.0
@@ -2307,7 +2488,16 @@ def run_background_recording(args: argparse.Namespace) -> int:
             print(f"Another voice worker (pid {current_pid}) already owns the lock; exiting.", flush=True)
             play_cue(args, "error")
             return 0
-        _publish_status("starting", "init")
+        is_cold_boot = voicemode_telemetry.check_and_mark_boot_session()
+        _publish_status(
+            "starting",
+            "init",
+            eta_remaining_s=None,
+            eta_epoch=None,
+            eta_source=None,
+            eta_confidence=None,
+            overrun=False,
+        )
         input_device = parse_device(args.input_device)
         sample_rate = resolve_sample_rate(input_device, args.sample_rate)
         seg_duration = chunk_seconds(args)
@@ -2323,7 +2513,18 @@ def run_background_recording(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, handle_cancel)
         signal.signal(signal.SIGINT, handle_cancel)
         write_pid_state(pid, "recording")
-        _publish_status("recording", "capture", audio_s=0.0, segments=0, segments_done=0)
+        _publish_status(
+            "recording",
+            "capture",
+            audio_s=0.0,
+            segments=0,
+            segments_done=0,
+            eta_remaining_s=None,
+            eta_epoch=None,
+            eta_source=None,
+            eta_confidence=None,
+            overrun=False,
+        )
 
         play_cue(args, "start")
         active_stage = "recording/capture"
@@ -2358,7 +2559,17 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 try:
                     live = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
                     segs = int(math.ceil(live / seg_duration)) if seg_duration and seg_duration > 0 else 0
-                    _publish_status("recording", "capture", audio_s=live, segments=segs)
+                    _publish_status(
+                        "recording",
+                        "capture",
+                        audio_s=live,
+                        segments=segs,
+                        eta_remaining_s=None,
+                        eta_epoch=None,
+                        eta_source=None,
+                        eta_confidence=None,
+                        overrun=False,
+                    )
                 except Exception:
                     pass
                 next_status_at = time.monotonic() + voicemode_telemetry.STATUS_HEARTBEAT_S
@@ -2378,7 +2589,14 @@ def run_background_recording(args: argparse.Namespace) -> int:
         active_stage = "WAV finalization"
         try:
             live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
-            remaining = voicemode_telemetry.prior_eta_seconds(live_audio, getattr(args, "model", None))
+            cfg_dict = vars(args) if hasattr(args, "__dict__") else {}
+            eta, src, lvl, n, conf = _compute_eta(
+                live_audio,
+                model=getattr(args, "model", None),
+                backend=run_state.get("backend"),
+                config=cfg_dict,
+                elapsed_record_s=live_audio,
+            )
             segs_est = int(math.ceil(live_audio / seg_duration)) if seg_duration and seg_duration > 0 else 0
             _publish_status(
                 "transcribing",
@@ -2386,9 +2604,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 audio_s=live_audio,
                 segments=segs_est,
                 segments_done=0,
-                eta_remaining_s=remaining,
-                eta_confidence="low",
-                eta_source="prior",
+                eta_remaining_s=int(math.ceil(eta)) if eta is not None else None,
+                eta_confidence=conf or "low",
+                eta_source=src or "prior",
+                key_level=lvl,
+                key_n=n,
                 overrun=False,
             )
         except Exception:
@@ -2410,8 +2630,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
         try:
             d = round(float(duration), 3)
+            cfg_dict = vars(args) if hasattr(args, "__dict__") else {}
             remaining, eta_source, eta_key_level, eta_n, eta_confidence = _compute_eta(
-                d, getattr(args, "model", None), run_state.get("backend")
+                d,
+                model=getattr(args, "model", None),
+                backend=run_state.get("backend"),
+                config=cfg_dict,
+                elapsed_record_s=d,
             )
             _publish_status(
                 "transcribing",
@@ -2419,9 +2644,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 audio_s=d,
                 segments=total_chunks,
                 segments_done=0,
-                eta_remaining_s=remaining,
+                eta_remaining_s=int(math.ceil(remaining)) if remaining is not None else None,
                 eta_confidence=eta_confidence or "low",
                 eta_source=eta_source or "prior",
+                key_level=eta_key_level,
+                key_n=eta_n,
                 overrun=False,
             )
         except Exception:
