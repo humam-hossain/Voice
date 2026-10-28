@@ -1,0 +1,50 @@
+{
+  "phase": "6",
+  "phase_name": "Foundations, Ledger & Status Contract",
+  "timestamp": "2026-10-26T00:05:00Z",
+  "areas_completed": ["Machine fingerprint", "Outcome vocabulary & dead runs"],
+  "areas_remaining": ["Stage-timing honesty", "Phase 6 ETA + first snapshot"],
+  "decisions": {
+    "Machine fingerprint": [
+      {
+        "question": "How should the ledger identify \"this machine\"?",
+        "answer": "Salted machine-id hash: hash /etc/machine-id with a random per-install salt stored 0600 in the state dir; fall back to a random ID if machine-id is unreadable.",
+        "options_presented": ["Salted machine-id hash", "Random install_id", "Hardware characteristics hash", "You decide"]
+      },
+      {
+        "question": "What belongs in the config fingerprint that keys calibration?",
+        "answer": "Minimal inferencing tuple: model, device, compute_type, beam_size, vad_filter, language, chunk_seconds, resolved backend string.",
+        "options_presented": ["Minimal inferencing tuple", "Tuple + environment block", "Backend-only"]
+      },
+      {
+        "question": "Which character counts go in the ledger row?",
+        "answer": "Two counts: chars_out (raw transcript length) and chars_typed (length after normalize_typed_text; 0 when paste is off or insert failed).",
+        "options_presented": ["Two counts: raw + typed", "Typed characters only", "Raw transcript only"]
+      }
+    ],
+    "Outcome vocabulary & dead runs": [
+      {
+        "question": "What vocabulary should the ledger's `outcome` field use?",
+        "answer": "Four outcomes: success, cancelled, error, watchdog_timeout, abandoned — plus separate flags fallback_used and insert_ok and per-segment ok. Partial segment failures stay success with segments[].ok=false.",
+        "options_presented": ["Four outcomes + flags", "Flat enum incl. fallbacks", "Outcome + free-text detail"]
+      },
+      {
+        "question": "How should a SIGKILL'd or power-cut run be reconciled?",
+        "answer": "Next invocation reconciles: dead PID file + unexpired status.json snapshot triggers an `abandoned` row built from the snapshot (actual timings null, last-known stage recorded), then both files are cleared. The dead run itself never writes.",
+        "options_presented": ["Next invocation reconciles", "Expiry only, no row", "Explicit reconcile command only"]
+      },
+      {
+        "question": "Which lifecycle events should produce a ledger row?",
+        "answer": "Every worker process gets a row, including aborts before recording starts (audio_s=0, outcome=cancelled/error). Toggles equal rows.",
+        "options_presented": ["Every worker process", "Only runs that reach recording", "Every toggle invocation"]
+      }
+    ]
+  },
+  "deferred_ideas": [],
+  "canonical_refs": [
+    ".planning/ROADMAP.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/PROJECT.md",
+    "voice.py"
+  ]
+}

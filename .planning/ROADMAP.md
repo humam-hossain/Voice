@@ -44,7 +44,14 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
   3. After every run — success, cancel, error, watchdog timeout, or GPU→CPU fallback — exactly one schema-v1 ledger row exists with predicted and actual timings, stage timings whose decode spans full generator consumption, per-segment decoder evidence, config/backend/host fingerprint, outcome, prediction metadata, and reserved TTS fields with no TTS data written, while `status.json` is removed.
   4. `status.json` is published atomically at every transition and within 100 ms of entering transcribing, using monotonic durations and epoch cross-process timestamps; deleting it never changes the bar's state because the PID file remains the authority, and stale snapshots expire.
   5. The ledger records character counts only and contains no transcript text, prompts, hotwords, clipboard content, hostnames, usernames, or paths; directories are `0700` and files `0600`; `VOICE_METRICS=off` stops all telemetry writes.
-**Plans**: TBD
+**Plans:** 6 plans
+Plans:
+- [ ] 06-01-PLAN.md — Tracer: one run → one ledger row + status publish/remove end-to-end, telemetry seam, import-light CLI
+- [ ] 06-02-PLAN.md — Freeze ledger schema v1: allowlisted builder, privacy tests, TTS-reserved fields, rotation, docs
+- [ ] 06-03-PLAN.md — Close duplicate-worker race and torn PID reads: flock around toggle, atomic PID writes, ownership gate
+- [ ] 06-04-PLAN.md — Publish status contract v1: atomic status.json at every transition, 5 s heartbeat, prior ETA, expiry
+- [ ] 06-05-PLAN.md — Honest timing: timed transcription seam, per-chunk evidence, early model load, incremental decoding
+- [ ] 06-06-PLAN.md — Every exit truthful: shared finalize authority, watchdog row, abandoned-run reconciliation
 
 ### Phase 7: ETA Engine & Calibration
 **Goal**: A calibrated, honest ETA: one number appears immediately, counts down smoothly, corrects mid-run, and never lies when it expires.
