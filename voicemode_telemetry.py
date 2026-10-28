@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import itertools
 import json
 import os
+import re
 import tempfile
 import time
 from contextlib import contextmanager
@@ -47,6 +50,289 @@ def get_metrics_enabled() -> bool:
         return False
     return True
 
+LEDGER_ROTATE_BYTES = 5_000_000
+_archive_seq = itertools.count(1)
+
+SCHEMA_V1_KEYS = {
+    "schema", "source", "run_id", "install_id", "ts_start", "ts_end",
+    "outcome", "error_stage", "actual", "predicted", "audio_s",
+    "chars_out", "chars_typed", "fallback_used", "insert_ok",
+    "segments", "config", "backend", "calibration_key", "tts"
+}
+
+NESTED_KEYS = {
+    "actual": {"total_ms", "finalize_ms", "load_ms", "decode_ms", "insert_ms"},
+    "predicted": {"shown_s", "shown_at_epoch", "source", "key_level", "n", "confidence", "revisions", "actual_s"},
+    "segments": {"idx", "audio_s", "decode_ms", "chars", "ok", "fallback", "avg_logprob", "compression_ratio", "no_speech_prob", "temperature", "vad_audio_s", "error_type"},
+    "config": {"model", "device", "compute_type", "beam_size", "vad_filter", "language", "chunk_s"},
+    "tts": {"predicted_ms", "actual_ms", "chars", "voice", "backend", "synth_ms", "play_ms"},
+}
+
+
+def _empty_actual() -> dict:
+    return {"total_ms": None, "finalize_ms": None, "load_ms": None, "decode_ms": None, "insert_ms": None}
+
+
+def _empty_predicted() -> dict:
+    return {"shown_s": None, "shown_at_epoch": None, "source": None, "key_level": None, "n": None, "confidence": None, "revisions": None, "actual_s": None}
+
+
+def _empty_config() -> dict:
+    return {"model": None, "device": None, "compute_type": None, "beam_size": None, "vad_filter": None, "language": None, "chunk_s": None}
+
+
+def tts_reserved() -> dict:
+    return {"predicted_ms": None, "actual_ms": None, "chars": None, "voice": None, "backend": None, "synth_ms": None, "play_ms": None}
+
+
+def validate_record(record: dict) -> dict:
+    if not isinstance(record, dict):
+        raise ValueError("record must be a dict")
+    for key in record:
+        if key not in SCHEMA_V1_KEYS:
+            raise ValueError(f"unknown key: {key}")
+    if record.get("schema") != 1:
+        raise ValueError("schema must be 1")
+    if record.get("source") not in {"stt", "tts"}:
+        raise ValueError("invalid source")
+    if record.get("outcome") not in {"success", "cancelled", "error", "watchdog_timeout", "abandoned"}:
+        raise ValueError("invalid outcome")
+    
+    actual = record.get("actual")
+    if isinstance(actual, dict):
+        for k in actual:
+            if k not in NESTED_KEYS["actual"]:
+                raise ValueError(f"unknown key: actual.{k}")
+    predicted = record.get("predicted")
+    if isinstance(predicted, dict):
+        for k in predicted:
+            if k not in NESTED_KEYS["predicted"]:
+                raise ValueError(f"unknown key: predicted.{k}")
+    config = record.get("config")
+    if isinstance(config, dict):
+        for k in config:
+            if k not in NESTED_KEYS["config"]:
+                raise ValueError(f"unknown key: config.{k}")
+    tts = record.get("tts")
+    if isinstance(tts, dict):
+        for k in tts:
+            if k not in NESTED_KEYS["tts"]:
+                raise ValueError(f"unknown key: tts.{k}")
+    
+    segments = record.get("segments")
+    if segments is not None:
+        if not isinstance(segments, list):
+            raise ValueError("segments must be a list")
+        for seg in segments:
+            if not isinstance(seg, dict):
+                raise ValueError("segment must be a dict")
+            for k in seg:
+                if k not in NESTED_KEYS["segments"]:
+                    raise ValueError(f"unknown key: segments.{k}")
+    
+    # Ensure JSON serializable
+    json.dumps(record)
+    return record
+
+
+def get_install_id() -> str:
+    state_dir = get_state_dir()
+    install_id_path = state_dir / "install_id"
+    install_salt_path = state_dir / "install_salt"
+    try:
+        if install_id_path.exists():
+            content = install_id_path.read_text().strip()
+            if len(content) == 32 and all(c in "0123456789abcdef" for c in content):
+                return content
+    except Exception:
+        pass
+    
+    # Generate new install_id
+    try:
+        if install_salt_path.exists():
+            salt = install_salt_path.read_bytes()
+        else:
+            salt = os.urandom(32)
+            atomic_write_text(install_salt_path, salt.hex(), 0o600)  # store hex
+            # Better to store raw bytes as hex string properly
+            install_salt_path.write_bytes(salt)
+            try:
+                os.chmod(install_salt_path, 0o600)
+            except Exception:
+                pass
+    except Exception:
+        salt = os.urandom(32)
+    
+    # Get machine_id
+    machine_id = None
+    try:
+        machine_id_bytes = Path("/etc/machine-id").read_bytes().strip()
+        machine_id = machine_id_bytes
+    except Exception:
+        machine_id = os.urandom(16)
+    
+    install_id = hashlib.sha256(salt + b":" + machine_id).hexdigest()[:32]
+    try:
+        atomic_write_text(install_id_path, install_id, 0o600)
+    except Exception:
+        try:
+            install_id_path.write_text(install_id)
+            os.chmod(install_id_path, 0o600)
+        except Exception:
+            pass
+    return install_id
+
+
+def calibration_key(backend, config) -> str:
+    """Portability key used by Phase 7 for calibration grouping."""
+    try:
+        return f"{config.get('model')}|{config.get('device')}|{config.get('compute_type')}|{backend}|beam={config.get('beam_size')}|vad={int(bool(config.get('vad_filter')))}|lang={config.get('language')}|chunk={config.get('chunk_s')}"
+    except Exception:
+        return str(backend)
+
+
+def build_record(*, run_id, install_id, ts_start, ts_end, outcome, error_stage=None,
+                  actual=None, predicted=None, audio_s=0.0, chars_out=0, chars_typed=0,
+                  fallback_used=False, insert_ok=False, segments=None, config=None,
+                  backend=None, tts=None, source="stt", calibration_key_val=None) -> dict:
+    record = {}
+    record["schema"] = 1
+    record["source"] = source  # no TTS code path may call with source="tts" in this phase
+    record["run_id"] = run_id
+    record["install_id"] = install_id
+    record["ts_start"] = ts_start
+    record["ts_end"] = ts_end
+    record["outcome"] = outcome
+    record["error_stage"] = error_stage
+    
+    actual_filled = _empty_actual()
+    if actual and isinstance(actual, dict):
+        for k in actual_filled:
+            if k in actual:
+                actual_filled[k] = actual[k]
+    # coerce
+    for k in ["total_ms", "finalize_ms", "load_ms", "decode_ms", "insert_ms"]:
+        if actual_filled[k] is not None:
+            try:
+                actual_filled[k] = float(actual_filled[k])
+            except Exception:
+                pass
+    record["actual"] = actual_filled
+    
+    predicted_filled = _empty_predicted()
+    if predicted and isinstance(predicted, dict):
+        for k in predicted_filled:
+            if k in predicted:
+                predicted_filled[k] = predicted[k]
+    record["predicted"] = predicted_filled
+    
+    try:
+        record["audio_s"] = float(audio_s)
+    except Exception:
+        record["audio_s"] = 0.0
+    try:
+        record["chars_out"] = int(chars_out)
+    except Exception:
+        record["chars_out"] = 0
+    try:
+        record["chars_typed"] = int(chars_typed)
+    except Exception:
+        record["chars_typed"] = 0
+    record["fallback_used"] = bool(fallback_used)
+    record["insert_ok"] = bool(insert_ok)
+    
+    record["segments"] = segments if segments is not None else []
+    
+    config_filled = _empty_config()
+    if config and isinstance(config, dict):
+        for k in config_filled:
+            if k in config:
+                config_filled[k] = config[k]
+    record["config"] = config_filled
+    
+    record["backend"] = backend
+    if calibration_key_val is None and backend is not None and config_filled:
+        try:
+            calibration_key_val = calibration_key(backend, config_filled)
+        except Exception:
+            calibration_key_val = None
+    record["calibration_key"] = calibration_key_val
+    
+    record["tts"] = tts if tts is not None else tts_reserved()
+    
+    return validate_record(record)
+
+
+def _archive_path(path: Path) -> Path:
+    ts = time.strftime('%Y%m%dT%H%M%S', time.gmtime())
+    pid = os.getpid()
+    seq = next(_archive_seq)
+    candidate = path.with_name(f"metrics-{ts}-{pid}-{seq:06d}.jsonl")
+    # Ensure unique
+    counter = 0
+    while candidate.exists() and counter < 1000:
+        counter += 1
+        candidate = path.with_name(f"metrics-{ts}-{pid}-{seq:06d}-{counter}.jsonl")
+    return candidate
+
+
+def read_ledger_rows(paths=None):
+    metrics_dir = get_metrics_dir()
+    all_paths = []
+    if paths is not None:
+        all_paths = list(paths)
+    else:
+        main = get_ledger_path()
+        if main.exists():
+            all_paths.append(main)
+        # archives
+        try:
+            for p in sorted(metrics_dir.glob("metrics-*.jsonl")):
+                all_paths.append(p)
+        except Exception:
+            pass
+    for p in all_paths:
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if isinstance(obj, dict) and obj.get("schema") == 1:
+                            yield obj
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+
+def ledger_health():
+    metrics_dir = get_metrics_dir()
+    main = get_ledger_path()
+    try:
+        archives = len(list(metrics_dir.glob("metrics-*.jsonl")))
+    except Exception:
+        archives = 0
+    exists = main.exists()
+    size = main.stat().st_size if exists else 0
+    try:
+        rows = len(list(read_ledger_rows()))
+    except Exception:
+        rows = 0
+    return {
+        "path": str(main),
+        "exists": exists,
+        "bytes": size,
+        "rows": rows,
+        "archives": archives,
+        "enabled": get_metrics_enabled(),
+    }
+
+
+
+
 
 def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
     path = Path(path)
@@ -78,8 +364,25 @@ def atomic_write_json(path: Path, obj: Any, mode: int = 0o600) -> None:
 def append_ledger_row(record: dict) -> bool:
     if not get_metrics_enabled():
         return False
+    try:
+        validate_record(record)
+    except Exception:
+        raise
     path = get_ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.exists():
+            try:
+                if path.stat().st_size >= LEDGER_ROTATE_BYTES:
+                    try:
+                        archived = _archive_path(path)
+                        os.replace(path, archived)
+                    except OSError as e:
+                        print(f"telemetry rotation failed: {e}", file=__import__('sys').stderr)
+            except Exception:
+                pass
+    except Exception:
+        pass
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=True, sort_keys=True) + "\n"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:

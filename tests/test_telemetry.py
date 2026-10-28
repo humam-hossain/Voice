@@ -12,8 +12,13 @@ import voicemode_telemetry
 
 class TestTracerContract(TempXdgTestCase):
     def test_append_one_row_per_run(self) -> None:
-        row1 = {"schema": 1, "run_id": "a", "x": 1}
-        row2 = {"schema": 1, "run_id": "b", "x": 2}
+        import voicemode_telemetry as t
+        row1 = t.build_record(run_id="a", install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0, outcome="success",
+                             config={"model": "m", "device": "cpu", "compute_type": "int8", "beam_size": 1,
+                                     "vad_filter": True, "language": "en", "chunk_s": 180.0})
+        row2 = t.build_record(run_id="b", install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0, outcome="success",
+                             config={"model": "m", "device": "cpu", "compute_type": "int8", "beam_size": 1,
+                                     "vad_filter": True, "language": "en", "chunk_s": 180.0})
         voicemode_telemetry.append_ledger_row(row1)
         voicemode_telemetry.append_ledger_row(row2)
         ledger_path = voicemode_telemetry.get_ledger_path()
@@ -68,3 +73,103 @@ class TestTracerContract(TempXdgTestCase):
         self.assertIn("model", row["config"])
         status_path = voicemode_telemetry.get_state_dir() / "status.json"
         self.assertFalse(status_path.exists())
+
+
+from _hermetic import TempXdgTestCase
+import voicemode_telemetry as t
+import json
+import os
+from pathlib import Path
+
+
+class TestSchemaV1(TempXdgTestCase):
+    def test_every_top_level_key_present(self):
+        r = t.build_record(run_id='r1', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+                          outcome='success', audio_s=1.0, chars_out=10, chars_typed=9,
+                          config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                                  'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0},
+                          backend='cpu, int8', segments=[{'idx': 0, 'audio_s': 1.0, 'decode_ms': 100, 'chars': 10,
+                                                          'ok': True, 'fallback': False, 'avg_logprob': -0.1,
+                                                          'compression_ratio': 1.2, 'no_speech_prob': 0.01,
+                                                          'temperature': 0.0, 'vad_audio_s': 1.0, 'error_type': None}])
+        self.assertEqual(set(r.keys()), set(t.SCHEMA_V1_KEYS))
+        self.assertIn('shown_s', r['predicted'])
+        self.assertIn('avg_logprob', r['segments'][0])
+        self.assertEqual(r['tts'], t.tts_reserved())
+        self.assertEqual(r['source'], 'stt')
+
+
+class TestPrivacy(TempXdgTestCase):
+    def test_allowlist_rejects_extra_keys(self):
+        r = t.build_record(run_id='r1', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+                          outcome='success', config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                                                    'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0})
+        for bad in ['transcript', 'text', 'prompt', 'hotwords', 'clipboard', 'argv', 'cwd', 'hostname', 'username', 'path']:
+            with self.subTest(key=bad):
+                br = dict(r)
+                br[bad] = 'x'
+                with self.assertRaises(ValueError):
+                    t.validate_record(br)
+    
+    def test_no_disclosure_patterns(self):
+        r = t.build_record(run_id='r1', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+                          outcome='success', chars_out=5,
+                          config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                                  'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0})
+        import re
+        line = json.dumps(r)
+        sentinel = "SECRET_TRANSCRIPT_12345"
+        self.assertNotIn(sentinel, line)
+        for pat in [r'/home/', r'/tmp/', r'/usr/', r'\bpid \d+', r'@[a-z0-9.-]+\.(com|org|net)',
+                    r'\b[a-z0-9._%+-]+@[a-z0-9.-]+\b', r'/etc/']:
+            self.assertIsNone(re.search(pat, line))
+        def walk(d):
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    self.assertNotEqual(k, 'words')
+                    self.assertNotIn('text', k)
+                    walk(v)
+            elif isinstance(d, list):
+                for i in d:
+                    walk(i)
+        walk(r)
+
+
+class TestCharsOnly(TempXdgTestCase):
+    def test_chars_counts(self):
+        r = t.build_record(run_id='r1', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+                          outcome='success', chars_out=11, chars_typed=0,
+                          config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                                  'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0})
+        self.assertEqual(r['chars_out'], 11)
+        self.assertEqual(r['chars_typed'], 0)
+        self.assertFalse(r['insert_ok'])
+
+
+class TestInstallId(TempXdgTestCase):
+    def test_stable_and_unique(self):
+        id1 = t.get_install_id()
+        id2 = t.get_install_id()
+        self.assertEqual(id1, id2)
+        self.assertEqual(len(id1), 32)
+        all(c in '0123456789abcdef' for c in id1)
+        state_dir = t.get_state_dir()
+        self.assertTrue((state_dir / 'install_salt').exists())
+        self.assertTrue((state_dir / 'install_id').exists())
+        # modes
+        self.assertEqual((state_dir / 'install_id').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((state_dir / 'install_salt').stat().st_mode & 0o777, 0o600)
+
+
+class TestKillSwitchCoversEverything(TempXdgTestCase):
+    def test_kill_switch(self):
+        import os
+        os.environ['VOICE_METRICS'] = 'off'
+        r = {'schema': 1}
+        self.assertFalse(t.append_ledger_row(r))
+        self.assertFalse(t.publish_status({}))
+        h = t.ledger_health()
+        self.assertFalse(h['enabled'])
+        tmp = Path(self.xdg_root)
+        self.assertFalse((tmp / 'state' / 'voicemode' / 'metrics.jsonl').exists())
+        os.environ.pop('VOICE_METRICS', None)
