@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import re
+import statistics
 import tempfile
 import time
 from contextlib import contextmanager
@@ -183,10 +184,34 @@ def get_install_id() -> str:
     return install_id
 
 
+def extract_hierarchy_keys(config: Optional[dict], backend: Optional[str]) -> dict[str, str]:
+    """Extracts 4-tier hierarchy keys: L0 (8 fields) -> L1 (6 fields) -> L2 (4 fields) -> L3 (prior model)."""
+    cfg = config or {}
+    model = cfg.get("model") or "medium"
+    device = cfg.get("device") or "cpu"
+    compute_type = cfg.get("compute_type") or "int8"
+    b = backend or f"{device}, {compute_type}"
+    beam = cfg.get("beam_size") if cfg.get("beam_size") is not None else 1
+    if "vad_filter" in cfg and cfg.get("vad_filter") is not None:
+        vad = int(bool(cfg.get("vad_filter")))
+    else:
+        vad = 1
+    lang = cfg.get("language") or "auto"
+    chunk = cfg.get("chunk_s") if cfg.get("chunk_s") is not None else 180.0
+    prefix = str(model).lower().split(".")[0].split("-")[0]
+
+    return {
+        "L0": f"{model}|{device}|{compute_type}|{b}|beam={beam}|vad={vad}|lang={lang}|chunk={chunk}",
+        "L1": f"{model}|{device}|{compute_type}|{b}|beam={beam}|lang={lang}",
+        "L2": f"{model}|{device}|{compute_type}|{b}",
+        "L3": f"prior:{prefix}",
+    }
+
+
 def calibration_key(backend, config) -> str:
     """Portability key used by Phase 7 for calibration grouping."""
     try:
-        return f"{config.get('model')}|{config.get('device')}|{config.get('compute_type')}|{backend}|beam={config.get('beam_size')}|vad={int(bool(config.get('vad_filter')))}|lang={config.get('language')}|chunk={config.get('chunk_s')}"
+        return extract_hierarchy_keys(config, backend)["L0"]
     except Exception:
         return str(backend)
 
@@ -519,7 +544,8 @@ def with_pid_lock(lock_path: Optional[Path] = None) -> Iterator[None]:
 STATUS_V1_KEYS = [
     "schema", "pid", "run_id", "state", "phase", "started_at", "updated_at",
     "expires_at", "audio_s", "segments", "segments_done", "eta_epoch",
-    "eta_remaining_s", "eta_confidence", "eta_source", "overrun", "report_path"
+    "eta_remaining_s", "eta_confidence", "eta_source", "overrun", "report_path",
+    "revision_count", "last_revised_at", "key_level", "key_n"
 ]
 PID_STATES = ("starting", "recording", "transcribing", "typing", "speaking")
 STATUS_PHASES = ("init", "capture", "finalize", "load", "decode", "insert", "wrap-up")
@@ -545,7 +571,9 @@ def prior_eta_seconds(audio_s, model=None):
 
 def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expires_at=None,
                   audio_s=0.0, segments=0, segments_done=0, eta_epoch=None, eta_remaining_s=None,
-                  eta_confidence=None, eta_source=None, overrun=False, report_path=None):
+                  eta_confidence=None, eta_source=None, overrun=False, report_path=None,
+                  revision_count: int = 0, last_revised_at: Optional[float] = None,
+                  key_level: Optional[str] = None, key_n: Optional[int] = None):
     now = time.time()
     if updated_at is None:
         updated_at = now
@@ -613,6 +641,10 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
     status["eta_source"] = eta_source
     status["overrun"] = bool(overrun)
     status["report_path"] = report_path
+    status["revision_count"] = max(0, int(revision_count)) if revision_count is not None else 0
+    status["last_revised_at"] = float(last_revised_at) if last_revised_at is not None else None
+    status["key_level"] = str(key_level) if key_level is not None else None
+    status["key_n"] = max(0, int(key_n)) if key_n is not None else None
     return validate_status(status)
 
 
@@ -637,6 +669,14 @@ def validate_status(status):
     run_id = status.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise ValueError("invalid run_id")
+    rev_cnt = status.get("revision_count")
+    if rev_cnt is not None:
+        if not isinstance(rev_cnt, int) or rev_cnt < 0:
+            raise ValueError("revision_count must be a non-negative integer")
+    kn = status.get("key_n")
+    if kn is not None:
+        if not isinstance(kn, int) or kn < 0:
+            raise ValueError("key_n must be a non-negative integer")
     eta_remain = status.get("eta_remaining_s")
     if eta_remain is not None:
         try:
@@ -684,10 +724,25 @@ def status_expired(status, now=None):
 
 # ETA/Calibration (Phase 7)
 CALIBRATION_FILENAME = "calibration.json"
+CALIBRATION_RESET_FILENAME = ".calibration_reset"
 
 
 def get_calibration_path() -> Path:
     return get_metrics_dir() / CALIBRATION_FILENAME
+
+
+def get_calibration_reset_path() -> Path:
+    return get_metrics_dir() / CALIBRATION_RESET_FILENAME
+
+
+def get_calibration_reset_timestamp() -> Optional[float]:
+    p = get_calibration_reset_path()
+    try:
+        if p.exists():
+            return float(p.read_text().strip())
+    except Exception:
+        pass
+    return None
 
 
 def reset_calibration() -> bool:
@@ -695,17 +750,19 @@ def reset_calibration() -> bool:
         p = get_calibration_path()
         if p.exists():
             p.unlink()
+        reset_p = get_calibration_reset_path()
+        atomic_write_text(reset_p, str(time.time()), 0o600)
         return True
     except Exception:
         return False
 
 
-def load_calibration():
+def load_calibration() -> dict:
     try:
         p = get_calibration_path()
         if not p.exists():
             return {}
-        content = p.read_text()
+        content = p.read_text(encoding="utf-8")
         data = json.loads(content)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -721,158 +778,297 @@ def save_calibration(data: dict) -> bool:
         return False
 
 
+def check_and_mark_boot_session(state_dir: Optional[Path] = None) -> bool:
+    """Returns True if this is the first run after system boot (cold run)."""
+    if state_dir is None:
+        state_dir = get_state_dir()
+    marker = Path(state_dir) / ".boot_session"
+    if marker.exists():
+        return False
+    try:
+        marker.touch(mode=0o600)
+    except OSError:
+        pass
+    return True
+
+
+def compute_mad_confidence(residuals: list[float]) -> float:
+    """Computes confidence score: 1.0 - MAD / median_residual clamped [0.0, 1.0]."""
+    if not residuals or len(residuals) < 3:
+        return 0.0
+    try:
+        med = statistics.median(residuals)
+        if med <= 0.0:
+            return 1.0
+        deviations = [abs(r - med) for r in residuals]
+        mad = statistics.median(deviations)
+        ratio = mad / med
+        return round(max(0.0, min(1.0, 1.0 - ratio)), 3)
+    except Exception:
+        return 0.0
+
+
 def _is_calibration_excluded(record: dict) -> bool:
     try:
-        outcome = record.get("outcome")
-        if outcome in {"error", "cancelled", "watchdog_timeout", "abandoned"}:
+        if record.get("outcome") != "success":
             return True
         if record.get("fallback_used"):
             return True
-        config = record.get("config") or {}
-        if config.get("device") == "cuda" and record.get("outcome") != "success":
-            # exclude if fallback/failed in some cases - be conservative
-            pass
+        actual = record.get("actual") or {}
+        load_ms = actual.get("load_ms")
+        # Contention proxy: load_ms > 3x calibrated/prior load (1.2s prior * 3 = 3600ms)
+        if load_ms is not None and float(load_ms) > 3600.0:
+            return True
+        pred = record.get("predicted") or {}
+        if pred.get("source") == "cold":
+            return True
+        audio_s = float(record.get("audio_s") or 0.0)
+        decode_ms = actual.get("decode_ms")
+        if decode_ms is None or audio_s <= 0.0:
+            return True
+        decode_s = float(decode_ms) / 1000.0
+        rate = decode_s / audio_s
+        if rate < 0.01 or rate > 10.0:
+            return True
     except Exception:
         pass
     return False
 
 
-def fit_calibration_from_ledger(max_runs: int = 1000):
-    """Fit calibration from ledger. Excludes failures/fallbacks/outliers/cold/high-load from fitting but keeps records."""
-    cal = load_calibration()
-    # Build buckets by calibration_key
-    buckets = {}
+def _get_acc(accumulators: dict, tier: str, key: Optional[str]) -> dict:
+    if not isinstance(accumulators, dict) or not key:
+        return {}
+    tier_map = accumulators.get(tier)
+    if isinstance(tier_map, dict) and key in tier_map:
+        return tier_map[key]
+    if key in accumulators and isinstance(accumulators[key], dict):
+        return accumulators[key]
+    return {}
+
+
+def resolve_calibrated_rate(keys: dict[str, str], accumulators: dict, prior_rtf: float) -> tuple[float, str, int]:
+    """Resolves rate using hierarchy fallback with James-Stein shrinkage blending."""
+    # L2 rate resolution
+    l2_key = keys.get("L2")
+    l2_acc = _get_acc(accumulators, "L2", l2_key)
+    l2_n = l2_acc.get("n", 0)
+    l2_audio = l2_acc.get("sum_audio_s", 0.0)
+    l2_decode = l2_acc.get("sum_decode_s", 0.0)
+    if l2_n >= 3 and l2_audio > 0:
+        raw_l2 = l2_decode / l2_audio
+        if 0.01 <= raw_l2 <= 10.0:
+            w2 = min(1.0, l2_n / 10.0)
+            rate_l2 = w2 * raw_l2 + (1.0 - w2) * prior_rtf
+            valid_l2 = True
+        else:
+            rate_l2 = prior_rtf
+            valid_l2 = False
+    else:
+        rate_l2 = prior_rtf
+        valid_l2 = False
+
+    # L1 rate resolution
+    l1_key = keys.get("L1")
+    l1_acc = _get_acc(accumulators, "L1", l1_key)
+    l1_n = l1_acc.get("n", 0)
+    l1_audio = l1_acc.get("sum_audio_s", 0.0)
+    l1_decode = l1_acc.get("sum_decode_s", 0.0)
+    if l1_n >= 3 and l1_audio > 0:
+        raw_l1 = l1_decode / l1_audio
+        if 0.01 <= raw_l1 <= 10.0:
+            w1 = min(1.0, l1_n / 10.0)
+            rate_l1 = w1 * raw_l1 + (1.0 - w1) * rate_l2
+            valid_l1 = True
+        else:
+            rate_l1 = rate_l2
+            valid_l1 = False
+    else:
+        rate_l1 = rate_l2
+        valid_l1 = False
+
+    # L0 rate resolution
+    l0_key = keys.get("L0")
+    l0_acc = _get_acc(accumulators, "L0", l0_key)
+    l0_n = l0_acc.get("n", 0)
+    l0_audio = l0_acc.get("sum_audio_s", 0.0)
+    l0_decode = l0_acc.get("sum_decode_s", 0.0)
+    if l0_n >= 3 and l0_audio > 0:
+        raw_l0 = l0_decode / l0_audio
+        if 0.01 <= raw_l0 <= 10.0:
+            w0 = min(1.0, l0_n / 10.0)
+            rate_l0 = w0 * raw_l0 + (1.0 - w0) * rate_l1
+            valid_l0 = True
+        else:
+            rate_l0 = rate_l1
+            valid_l0 = False
+    else:
+        rate_l0 = rate_l1
+        valid_l0 = False
+
+    if valid_l0:
+        return rate_l0, "L0", l0_n
+    elif valid_l1:
+        return rate_l1, "L1", l1_n
+    elif valid_l2:
+        return rate_l2, "L2", l2_n
+    else:
+        return prior_rtf, "L3", 0
+
+
+def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -> bool:
+    """Updates calibration cache accumulators from a completed run record."""
+    if not isinstance(record, dict):
+        return False
+    if _is_calibration_excluded(record):
+        return False
+
+    save_needed = False
+    if cal_data is None:
+        cal = load_calibration()
+        save_needed = True
+    else:
+        cal = cal_data
+
+    cal.setdefault("accumulators", {"L0": {}, "L1": {}, "L2": {}})
+    accs = cal["accumulators"]
+    if not isinstance(accs, dict):
+        accs = {"L0": {}, "L1": {}, "L2": {}}
+        cal["accumulators"] = accs
+    for tier in ("L0", "L1", "L2"):
+        accs.setdefault(tier, {})
+
+    actual = record.get("actual") or {}
+    decode_ms = actual.get("decode_ms")
+    audio_s = record.get("audio_s")
+    if decode_ms is None or audio_s is None:
+        return False
+    try:
+        audio_s = float(audio_s)
+        decode_s = float(decode_ms) / 1000.0
+        if audio_s <= 0 or decode_s <= 0:
+            return False
+    except Exception:
+        return False
+
+    config = record.get("config") or {}
+    backend = record.get("backend") or "cpu, int8"
+    keys = extract_hierarchy_keys(config, backend)
+
+    load_ms = actual.get("load_ms")
+    load_s = float(load_ms) / 1000.0 if load_ms is not None else PRIOR_LOAD_S
+
+    for tier in ("L0", "L1", "L2"):
+        tier_key = keys.get(tier)
+        if not tier_key:
+            continue
+        tier_dict = accs[tier]
+        entry = tier_dict.setdefault(tier_key, {
+            "sum_decode_s": 0.0,
+            "sum_audio_s": 0.0,
+            "n": 0,
+            "load_s": PRIOR_LOAD_S
+        })
+        entry["sum_decode_s"] += decode_s
+        entry["sum_audio_s"] += audio_s
+        entry["n"] += 1
+        entry["load_s"] = round((entry.get("load_s", PRIOR_LOAD_S) * (entry["n"] - 1) + load_s) / entry["n"], 4)
+
+    # Residuals tracking
+    predicted = record.get("predicted") or {}
+    actual_total_ms = actual.get("total_ms")
+    shown_s = predicted.get("shown_s")
+    if actual_total_ms is not None and shown_s is not None:
+        try:
+            res = abs(float(shown_s) - (float(actual_total_ms) / 1000.0))
+            residuals = cal.setdefault("residuals", [])
+            residuals.append(round(res, 4))
+            if len(residuals) > 30:
+                cal["residuals"] = residuals[-30:]
+            cal["confidence"] = compute_mad_confidence(cal["residuals"])
+        except Exception:
+            pass
+
+    cal["updated_at"] = time.time()
+
+    if save_needed:
+        save_calibration(cal)
+    return True
+
+
+def rebuild_calibration_from_ledger() -> dict:
+    """Rebuilds calibration.json from metrics.jsonl, respecting reset epoch."""
+    cal = {"accumulators": {"L0": {}, "L1": {}, "L2": {}}, "residuals": []}
+    reset_epoch = get_calibration_reset_timestamp()
     try:
         for rec in read_ledger_rows():
             if not isinstance(rec, dict):
                 continue
-            if rec.get("source") != "stt":
-                continue
-            if _is_calibration_excluded(rec):
-                continue
-            key = rec.get("calibration_key") or calibration_key(rec.get("backend"), rec.get("config") or {})
-            if not key:
-                continue
-            actual = rec.get("actual") or {}
-            total_ms = actual.get("total_ms")
-            audio_s = rec.get("audio_s")
-            if total_ms is None or audio_s is None:
-                continue
-            try:
-                if float(audio_s) <= 0:
-                    continue
-            except Exception:
-                continue
-            buckets.setdefault(key, []).append({
-                "total_ms": float(total_ms),
-                "audio_s": float(audio_s),
-                "predicted": rec.get("predicted") or {}
-            })
+            ts = rec.get("ts_end") or rec.get("ts_start")
+            if reset_epoch is not None and ts is not None:
+                try:
+                    if float(ts) < reset_epoch:
+                        continue
+                except Exception:
+                    pass
+            update_calibration_from_run(rec, cal_data=cal)
     except Exception:
         pass
-    
-    # Fit ratio-of-sums style rates per component
-    for key, samples in buckets.items():
-        if len(samples) < 3:  # min n=3
-            continue
-        # Compute ratio of sums for rate component: (sum total - sum fixed)/sum audio
-        sum_audio = sum(s["audio_s"] for s in samples)
-        sum_total_ms = sum(s["total_ms"] for s in samples)
-        # Use priors as baseline fixed components, compute effective rate
-        rtf_eff = (sum_total_ms / 1000.0 - (PRIOR_FINALIZE_S + PRIOR_LOAD_S + PRIOR_INSERT_S)) / sum_audio if sum_audio > 0 else PRIOR_RTF.get("medium", 0.95)
-        if rtf_eff < 0.01 or rtf_eff > 10.0:
-            continue  # outlier
-        # median-based smoothing
-        try:
-            rtf_vals = [(s["total_ms"] / 1000.0 - (PRIOR_FINALIZE_S + PRIOR_LOAD_S + PRIOR_INSERT_S)) / s["audio_s"] if s["audio_s"] > 0 else None for s in samples]
-            rtf_vals = [v for v in rtf_vals if v is not None and 0.01 < v < 10.0]
-            if len(rtf_vals) >= 3:
-                import statistics
-                med = statistics.median(rtf_vals)
-                # shrinkage toward prior
-                rtf_eff = 0.7 * med + 0.3 * PRIOR_RTF.get("medium", 0.95)
-        except Exception:
-            pass
-        cal[key] = {
-            "rtf": round(float(rtf_eff), 4),
-            "n": len(samples),
-            "finalize_s": PRIOR_FINALIZE_S,
-            "load_s": PRIOR_LOAD_S,
-            "insert_s": PRIOR_INSERT_S,
-            "updated_at": time.time()
-        }
     save_calibration(cal)
     return cal
 
 
-def calibrated_eta_seconds(audio_s, model=None, backend=None, config=None, calibration_key_val=None):
+def fit_calibration_from_ledger(max_runs: int = 1000):
+    return rebuild_calibration_from_ledger()
+
+
+def calibrated_eta_seconds(audio_s, model=None, backend=None, config=None, calibration_key_val=None, elapsed_record_s=0.0, is_cold=False):
     """Compute ETA with calibration. Returns (eta_seconds, source, key_level, n, confidence)."""
-    if os.getenv("VOICE_ETA", "").strip().lower() in {"0", "false", "no", "off", ""} and os.getenv("VOICE_ETA") is not None:
-        # If explicitly off
-        pass
+    voice_eta_env = os.getenv("VOICE_ETA")
+    if voice_eta_env is not None and voice_eta_env.strip().lower() in {"0", "false", "no", "off", ""}:
+        return None, None, None, None, None
+
+    cfg = dict(config) if config else {}
+    if model is not None and not cfg.get("model"):
+        cfg["model"] = model
+    if backend is None:
+        backend = f"{cfg.get('device', 'cpu')}, {cfg.get('compute_type', 'int8')}"
+
+    keys = extract_hierarchy_keys(cfg, backend)
+    model_str = str(cfg.get("model", model or "medium")).lower()
+    prefix = model_str.split(".")[0].split("-")[0]
+    prior_rtf = PRIOR_RTF.get(prefix, PRIOR_RTF["medium"])
+
     cal = load_calibration()
-    if config is None:
-        config = {}
-    if calibration_key_val is None and backend is not None:
-        try:
-            calibration_key_val = calibration_key(backend, config)
-        except Exception:
-            calibration_key_val = None
-    
-    # Try full key first, then fallback hierarchy
-    key_level = None
-    n = 0
-    rtf = None
-    source = "prior"
-    confidence = "low"
-    
-    if calibration_key_val and calibration_key_val in cal:
-        entry = cal[calibration_key_val]
-        if entry.get("n", 0) >= 3:
-            rtf = entry.get("rtf")
-            n = entry.get("n")
-            key_level = calibration_key_val
-            source = "calibrated"
+    accumulators = cal.get("accumulators", {})
+
+    rate, chosen_level, n = resolve_calibrated_rate(keys, accumulators, prior_rtf)
+
+    if is_cold:
+        source = "cold"
+        load_s = PRIOR_LOAD_S
+        confidence = "low"
+    elif chosen_level in {"L0", "L1", "L2"}:
+        source = "calibrated"
+        acc_entry = _get_acc(accumulators, chosen_level, keys.get(chosen_level))
+        load_s = acc_entry.get("load_s", PRIOR_LOAD_S)
+        mad_conf = cal.get("confidence")
+        if isinstance(mad_conf, (int, float)):
+            if mad_conf >= 0.75 and n >= 10:
+                confidence = "high"
+            elif mad_conf >= 0.4 or n >= 5:
+                confidence = "medium"
+            else:
+                confidence = "low"
+        else:
             confidence = "medium" if n >= 10 else "low"
     else:
-        # Try fallbacks by prefix
-        if calibration_key_val:
-            try:
-                parts = calibration_key_val.split("|")
-                # Try without some parts
-                for drop in range(1, len(parts)):
-                    k2 = "|".join(parts[:len(parts)-drop]) if drop > 0 else parts[0]
-                    if k2 in cal and cal[k2].get("n", 0) >= 3:
-                        entry = cal[k2]
-                        rtf = entry.get("rtf")
-                        n = entry.get("n")
-                        key_level = k2
-                        source = "calibrated"
-                        confidence = "low"
-                        break
-            except Exception:
-                pass
-    
-    if rtf is None:
-        # Use prior
-        try:
-            model_str = str(model).lower() if model is not None else "medium"
-            prefix = model_str.split(".")[0].split("-")[0]
-            rtf = PRIOR_RTF.get(prefix, PRIOR_RTF["medium"])
-        except Exception:
-            rtf = PRIOR_RTF.get("medium", 0.95)
         source = "prior"
-        key_level = f"prior:{prefix if 'prefix' in locals() else 'medium'}"
-        n = 0
-        confidence = "low"
-    
-    try:
-        finalize_s = PRIOR_FINALIZE_S
         load_s = PRIOR_LOAD_S
-        insert_s = PRIOR_INSERT_S
-        eta = finalize_s + load_s + float(rtf) * max(0.0, float(audio_s)) + insert_s
-        eta = round(max(0.0, float(eta)), 2)
-        return eta, source, key_level, n, confidence
-    except Exception:
-        eta = prior_eta_seconds(audio_s, model)
-        return eta, "prior", f"prior:{model}", 0, "low"
+        confidence = "low"
+
+    remaining_load = max(0.0, float(load_s) - max(0.0, float(elapsed_record_s)))
+    finalize_s = PRIOR_FINALIZE_S
+    insert_s = PRIOR_INSERT_S
+    eta = finalize_s + remaining_load + float(rate) * max(0.0, float(audio_s)) + insert_s
+    eta = round(max(0.0, float(eta)), 2)
+    return eta, source, chosen_level, n, confidence
