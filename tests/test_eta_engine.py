@@ -210,3 +210,104 @@ class TestKeyHierarchy(TempXdgTestCase):
         rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, accs, prior_rtf)
         self.assertEqual(level, "L1")
         self.assertAlmostEqual(rate, 0.5, places=4)
+
+
+class TestTimingEndpoints(TempXdgTestCase):
+    def test_dynamic_load_subtraction(self) -> None:
+        """ETA-08 / D-17: Dynamic model load subtraction clamps at 0.0."""
+        # Baseline with elapsed_record_s=0.0:
+        # finalize_s (0.4) + load_s (1.2) + rate (0.95) * 10.0 + insert_s (0.2) = 11.3s
+        eta_0, _, _, _, _ = voicemode_telemetry.calibrated_eta_seconds(
+            10.0, elapsed_record_s=0.0
+        )
+        self.assertEqual(eta_0, 11.3)
+
+        # When recording elapsed is 0.5s: remaining_load = 1.2 - 0.5 = 0.7s
+        # eta = 0.4 + 0.7 + 9.5 + 0.2 = 10.8s
+        eta_05, _, _, _, _ = voicemode_telemetry.calibrated_eta_seconds(
+            10.0, elapsed_record_s=0.5
+        )
+        self.assertEqual(eta_05, 10.8)
+
+        # When recording elapsed is 3.0s: remaining_load = max(0, 1.2 - 3.0) = 0.0s
+        # eta = 0.4 + 0.0 + 9.5 + 0.2 = 10.1s
+        eta_30, _, _, _, _ = voicemode_telemetry.calibrated_eta_seconds(
+            10.0, elapsed_record_s=3.0
+        )
+        self.assertEqual(eta_30, 10.1)
+
+    def test_cold_vs_warm_load(self) -> None:
+        """D-18 / D-21 / D-23: Cold run forces prior load (1.2s) and source='cold'."""
+        config = {"model": "medium", "device": "cpu", "compute_type": "int8"}
+        backend = "cpu, int8"
+
+        # Seed calibration cache with warm load_s = 0.3s
+        cal = {
+            "accumulators": {
+                "L0": {},
+                "L1": {},
+                "L2": {
+                    "medium|cpu|int8|cpu, int8": {
+                        "n": 10,
+                        "sum_decode_s": 5.0,
+                        "sum_audio_s": 10.0,
+                        "load_s": 0.3,
+                    }
+                },
+            }
+        }
+        voicemode_telemetry.save_calibration(cal)
+
+        # Warm run: uses calibrated load_s = 0.3s
+        # finalize(0.4) + remaining_load(0.3) + rate(0.5)*10.0 + insert(0.2) = 5.9s
+        eta_warm, src_warm, lvl_warm, n_warm, _ = voicemode_telemetry.calibrated_eta_seconds(
+            10.0, config=config, backend=backend, elapsed_record_s=0.0, is_cold=False
+        )
+        self.assertEqual(src_warm, "calibrated")
+        self.assertEqual(lvl_warm, "L2")
+        self.assertEqual(eta_warm, 5.9)
+
+        # Cold run: forces prior load_s = 1.2s, source='cold'
+        # finalize(0.4) + remaining_load(1.2) + rate(0.5)*10.0 + insert(0.2) = 6.8s
+        eta_cold, src_cold, _, _, _ = voicemode_telemetry.calibrated_eta_seconds(
+            10.0, config=config, backend=backend, elapsed_record_s=0.0, is_cold=True
+        )
+        self.assertEqual(src_cold, "cold")
+        self.assertEqual(eta_cold, 6.8)
+
+    def test_prediction_endpoint_horizon(self) -> None:
+        """ETA-08: Prediction horizon terminates at start of text insertion (insert_s)."""
+        # Components: finalize_s (0.4) + load_s (1.2) + insert_s (0.2) + rate*audio
+        # Audio = 0.0 -> eta = 0.4 + 1.2 + 0.2 = 1.8s
+        eta, _, _, _, _ = voicemode_telemetry.calibrated_eta_seconds(0.0)
+        self.assertEqual(eta, 1.8)
+
+    def test_status_contract_extension(self) -> None:
+        """D-11 / D-30: STATUS_V1_KEYS and build_status support extended keys."""
+        for required_key in ["revision_count", "last_revised_at", "key_level", "key_n"]:
+            self.assertIn(required_key, voicemode_telemetry.STATUS_V1_KEYS)
+
+        status = voicemode_telemetry.build_status(
+            pid=123,
+            run_id="run-abc",
+            state="transcribing",
+            phase="decode",
+            started_at=1000.0,
+            eta_remaining_s=4.0,
+            revision_count=3,
+            last_revised_at=1005.5,
+            key_level="L0",
+            key_n=12,
+        )
+
+        self.assertEqual(status["revision_count"], 3)
+        self.assertEqual(status["last_revised_at"], 1005.5)
+        self.assertEqual(status["key_level"], "L0")
+        self.assertEqual(status["key_n"], 12)
+
+        # Invalid revision_count must fail validation
+        with self.assertRaises(ValueError):
+            bad_status = dict(status)
+            bad_status["revision_count"] = -1
+            voicemode_telemetry.validate_status(bad_status)
+
