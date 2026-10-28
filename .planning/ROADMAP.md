@@ -27,7 +27,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 **Milestone Goal:** Show a trustworthy single-number ETA during transcription, and record prediction-vs-actual telemetry so the estimator improves over time and stays portable across CPU/CUDA hardware and model configurations.
 
 - [x] **Phase 6: Foundations, Ledger & Status Contract** - Freeze the schema and status contract, fix lifecycle races, and instrument honest stage timings.
-- [ ] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate.
+- [x] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate. — completed 2026-10-29
 - [ ] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports.
 - [ ] **Phase 9: Quickshell ETA Integration** - Replace "Transcribing..." with a glanceable countdown and a click that opens the report.
 - [ ] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix.
