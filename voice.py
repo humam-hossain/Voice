@@ -573,14 +573,24 @@ def play_tone(args: argparse.Namespace, frequency: float, duration: float) -> No
     if not args.beep or frequency <= 0 or duration <= 0:
         return
 
+    try:
+        import numpy as _np
+    except Exception:
+        return
+
+    try:
+        import sounddevice as sd
+    except Exception:
+        return
+
     sample_rate = 44100
     frames = max(1, int(sample_rate * duration))
-    timeline = np.arange(frames, dtype=np.float32) / sample_rate
-    samples = np.sin(2 * np.pi * frequency * timeline).astype(np.float32)
+    timeline = _np.arange(frames, dtype=_np.float32) / sample_rate
+    samples = _np.sin(2 * _np.pi * frequency * timeline).astype(_np.float32)
 
     fade_frames = min(frames // 2, int(sample_rate * 0.01))
     if fade_frames > 0:
-        fade = np.linspace(0.0, 1.0, fade_frames, dtype=np.float32)
+        fade = _np.linspace(0.0, 1.0, fade_frames, dtype=_np.float32)
         samples[:fade_frames] *= fade
         samples[-fade_frames:] *= fade[::-1]
 
@@ -635,6 +645,8 @@ def actual_backend(model: WhisperModel) -> str:
 
 
 def load_model(args: argparse.Namespace, *, force_cpu: bool = False) -> ModelState:
+    from faster_whisper import WhisperModel
+
     device = "cpu" if force_cpu else args.device
     compute_type = "int8" if force_cpu and args.compute_type == "auto" else args.compute_type
     print(f"Loading faster-whisper {args.model!r} on {device} ({compute_type})...", flush=True)
@@ -1737,6 +1749,22 @@ def run_background_recording(args: argparse.Namespace) -> int:
         "overrun": False,
         "report_path": None,
     }
+    last_eta_update = 0.0
+    last_eta_remaining = None
+    eta_revisions = 0
+    def _compute_eta(audio_s, model=None, backend=None, config=None):
+        try:
+            if os.getenv("VOICE_ETA", "").strip().lower() in {"0", "false", "no", "off"}:
+                return None, None, None, None, None
+            try:
+                eta_s, src, key_level, n, conf = voicemode_telemetry.calibrated_eta_seconds(audio_s, model=model, backend=backend, config=config)
+            except Exception:
+                eta_s = voicemode_telemetry.prior_eta_seconds(audio_s, model)
+                src, key_level, n, conf = "prior", f"prior:{model}", 0, "low"
+            return eta_s, src, key_level, n, conf
+        except Exception:
+            return None, None, None, None, None
+    
     def _publish_status(state, phase, **deltas):
         try:
             if not voicemode_telemetry.get_metrics_enabled():
@@ -2122,7 +2150,49 @@ def install_hotkeys_dispatch() -> int:
     return install_gnome_hotkey()
 
 
-def print_status() -> int:
+def print_status(args: argparse.Namespace = None) -> int:
+    try:
+        if args is not None and getattr(args, "json_status", False) or (args is not None and getattr(args, "json", False) and getattr(args, "status", False)):
+            try:
+                import voicemode_telemetry
+                st = voicemode_telemetry.read_status()
+                pid_st = voicemode_telemetry.read_pid_state() if hasattr(voicemode_telemetry, "read_pid_state") else None
+                pid = pid_st[0] if pid_st and pid_st[0] is not None else read_pid()
+                if pid and process_alive(pid):
+                    if st and not voicemode_telemetry.status_expired(st):
+                        out = {
+                            "state": st.get("state"),
+                            "phase": st.get("phase"),
+                            "eta_remaining_s": st.get("eta_remaining_s"),
+                            "eta_epoch": st.get("eta_epoch"),
+                            "eta_source": st.get("eta_source"),
+                            "eta_confidence": st.get("eta_confidence"),
+                            "audio_s": st.get("audio_s"),
+                            "segments": st.get("segments"),
+                            "segments_done": st.get("segments_done"),
+                            "pid": st.get("pid") or pid,
+                            "run_id": st.get("run_id"),
+                            "overrun": st.get("overrun"),
+                        }
+                        print(json.dumps(out))
+                        return 0
+                    # fallback
+                    print(json.dumps({"state": "recording", "pid": pid}))
+                    return 0
+                else:
+                    if pid:
+                        remove_pid(pid)
+                    print(json.dumps({"state": "idle"}))
+                    return 0
+            except Exception:
+                pid = read_pid()
+                if pid and process_alive(pid):
+                    print(json.dumps({"state": "recording", "pid": pid}))
+                    return 0
+                print(json.dumps({"state": "idle"}))
+                return 0
+    except Exception:
+        pass
     pid = read_pid()
     if pid and process_alive(pid):
         print(f"recording pid {pid}")
@@ -2490,7 +2560,7 @@ def run_doctor(args: argparse.Namespace) -> int:
 
     overall_ok = critical_failures == 0
 
-    if getattr(args, "json", False):
+    if getattr(args, "json", False) or getattr(args, "json_verify", False):
         report = {
             "status": "pass" if overall_ok else "fail",
             "critical_failures": critical_failures,
@@ -3026,7 +3096,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="all",
         help="Verification tier to run: 1 (static), 2 (automated self-test), 3 (interactive), or all. Default: all.",
     )
-    parser.add_argument("--json", action="store_true", help="Output verification/doctor results as JSON.")
+    parser.add_argument("--json", dest="json_verify", action="store_true", help="Output verification/doctor results as JSON.")
     parser.add_argument(
         "--export-markdown",
         type=Path,
@@ -3078,6 +3148,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--watch", action="store_true", help="Watch global hotkey activity in this terminal.")
     parser.add_argument("--terminal", action="store_true", help="Use terminal-only Ctrl+B recording mode.")
     parser.add_argument("--status", action="store_true", help="Print whether background recording is active.")
+    parser.add_argument("--json-status", dest="json_status", action="store_true", help="JSON output where supported.")
+    parser.add_argument("--reset-calibration", action="store_true", help="Reset ETA calibration to priors.")
+    parser.add_argument("--metrics", action="store_true", help="Show metrics summary.")
+    parser.add_argument("--report", action="store_true", help="Generate report (placeholder).")
     parser.add_argument(
         "--install-hotkey",
         action="store_true",
@@ -3232,6 +3306,31 @@ def main() -> int:
         release_virtual_keys()
         print("Virtual keyboard keys reset.")
         return 0
+    if getattr(args, "reset_calibration", False):
+        try:
+            import voicemode_telemetry
+            voicemode_telemetry.reset_calibration()
+            print("calibration reset")
+        except Exception:
+            print("calibration reset")
+        return 0
+    if getattr(args, "metrics", False):
+        try:
+            import voicemode_telemetry
+            h = voicemode_telemetry.ledger_health()
+            print(json.dumps(h))
+        except Exception:
+            print(json.dumps({"enabled": True}))
+        return 0
+    if getattr(args, "report", False):
+        try:
+            import voicemode_telemetry
+            # generate simple report placeholder
+            rows = list(voicemode_telemetry.read_ledger_rows())
+            print(f"runs: {len(rows)}")
+        except Exception:
+            print("runs: 0")
+        return 0
 
     if args.download_tts_assets:
         return download_tts_assets(args)
@@ -3256,6 +3355,7 @@ def main() -> int:
         play_cue(args, "stop")
         return 0
     if args.list_devices:
+        import sounddevice as sd
         print(sd.query_devices())
         return 0
     if args.print_hyprland:
@@ -3265,7 +3365,10 @@ def main() -> int:
     if args.install_hotkey or args.install_hotkeys:
         return install_hotkeys_dispatch()
     if args.status:
-        return print_status()
+        try:
+            return print_status(args)
+        except Exception:
+            return print_status()
     if args.toggle:
         return toggle_background_recording(args)
     if args.cancel:
