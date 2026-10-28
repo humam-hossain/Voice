@@ -99,7 +99,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 1,2)*
 
-- [ ] 07-03-PLAN.md — Calibration, CLI Flags, Status Exposure
+- [x] 07-03-PLAN.md — Calibration, CLI Flags, Status Exposure
 
 ### Phase 8: Accuracy Report & Click-Through
 

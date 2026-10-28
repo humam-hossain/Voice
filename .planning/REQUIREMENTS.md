@@ -49,13 +49,13 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 - [x] **ETA-01**: Estimate = finalize + load + rate × Σ(audio after VAD) + insert; rate is the ratio of sums, not the mean of ratios.
 - [x] **ETA-02**: Key hierarchy with a minimum of 3 samples per level, falling back to a shipped prior; the chosen level and n are recorded.
-- [ ] **ETA-03**: Robust calibration (median/shrinkage, MAD-based confidence) excludes failures, fallbacks, outliers, cold runs, and high-load runs from fitting only — the records themselves are kept.
+- [x] **ETA-03**: Robust calibration (median/shrinkage, MAD-based confidence) excludes failures, fallbacks, outliers, cold runs, and high-load runs from fitting only — the records themselves are kept.
 - [x] **ETA-04**: Mid-run correction after each segment; the display is monotone non-increasing except for marked upward revisions at most once per 2 s.
 - [x] **ETA-05**: Overrun behavior: 1 s floor → `Finishing…` → indeterminate; never negative, zero, fractional, or a range; overrun is recorded.
 - [x] **ETA-06**: ETA is shown only during transcribing/finalizing and hidden while starting/recording.
 - [x] **ETA-07**: A single number; uncalibrated estimates are prefixed `~`; no ranges.
 - [x] **ETA-08**: The ETA endpoint is "text begins inserting"; typing time is measured separately.
-- [ ] **ETA-09**: `--status --json` exposes state/phase/ETA/source/confidence; `--reset-calibration`; `VOICE_ETA=off`.
+- [x] **ETA-09**: `--status --json` exposes state/phase/ETA/source/confidence; `--reset-calibration`; `VOICE_ETA=off`.
 
 ### Reporting (RPT)
 
@@ -160,13 +160,13 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | STS-05 | 6 | Complete |
 | ETA-01 | 7 | Complete |
 | ETA-02 | 7 | Complete |
-| ETA-03 | 7 | Pending |
+| ETA-03 | 7 | Complete |
 | ETA-04 | 7 | Complete |
 | ETA-05 | 7 | Complete |
 | ETA-06 | 7 | Complete |
 | ETA-07 | 7 | Complete |
 | ETA-08 | 7 | Complete |
-| ETA-09 | 7 | Pending |
+| ETA-09 | 7 | Complete |
 | RPT-01 | 8 | Pending |
 | RPT-02 | 8 | Pending |
 | RPT-03 | 8 | Pending |
