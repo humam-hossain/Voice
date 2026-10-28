@@ -14,36 +14,36 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Foundation & Integrity (FND)
 
-- [ ] **FND-01**: Non-transcription commands (`--status`, `--report`, `--toggle`, `--cancel`, `--stop-tts`, `--doctor`) run without importing numpy, sounddevice, or faster-whisper; `voice --status` completes in under 100 ms warm.
-- [ ] **FND-02**: The PID state file is written atomically; readers never observe partial content; the existing `pid state` file format is unchanged.
-- [ ] **FND-03**: Two rapid toggle presses never spawn two workers (flock around read-decide-spawn; the worker re-verifies the PID file holds its own PID before recording).
-- [ ] **FND-04**: Every exit path (success, error, cancel, watchdog) writes a terminal ledger row and clears status/PID; SIGKILL is detected by expiry rather than a cleanup write.
-- [ ] **FND-05**: No new PID state strings are introduced; new granularity lives only in `status.json.phase`.
+- [x] **FND-01**: Non-transcription commands (`--status`, `--report`, `--toggle`, `--cancel`, `--stop-tts`, `--doctor`) run without importing numpy, sounddevice, or faster-whisper; `voice --status` completes in under 100 ms warm.
+- [x] **FND-02**: The PID state file is written atomically; readers never observe partial content; the existing `pid state` file format is unchanged.
+- [x] **FND-03**: Two rapid toggle presses never spawn two workers (flock around read-decide-spawn; the worker re-verifies the PID file holds its own PID before recording).
+- [x] **FND-04**: Every exit path (success, error, cancel, watchdog) writes a terminal ledger row and clears status/PID; SIGKILL is detected by expiry rather than a cleanup write.
+- [x] **FND-05**: No new PID state strings are introduced; new granularity lives only in `status.json.phase`.
 
 ### Telemetry Ledger (LED)
 
-- [ ] **LED-01**: One JSONL record per STT run in `$XDG_STATE_HOME/voicemode/metrics.jsonl`, schema v1, append-only, rotated at ~5 MB.
-- [ ] **LED-02**: A record stores predicted-as-shown and actual timing, stage timings (finalize/load/decode/insert), per-segment audio/decode/chars/ok, config, resolved backend, host fingerprint, and outcome/error stage.
-- [ ] **LED-03**: Prediction metadata is stored: source (prior/calibrated/mid-run), key level, n, confidence, time shown, and revisions.
-- [ ] **LED-04**: No transcript text, prompts, hotwords, paths, argv, hostname, username, or clipboard content is stored; enforced by an allowlist serialization test plus a regex scan.
-- [ ] **LED-05**: A `source` discriminator and TTS fields are reserved in schema v1; no TTS data is written yet.
-- [ ] **LED-06**: `VOICE_METRICS=off` kill switch; documented deletion procedure; directories `0700` / files `0600`; tests never write to real state or runtime directories.
-- [ ] **LED-07**: Character counts only — never words and never text.
+- [x] **LED-01**: One JSONL record per STT run in `$XDG_STATE_HOME/voicemode/metrics.jsonl`, schema v1, append-only, rotated at ~5 MB.
+- [x] **LED-02**: A record stores predicted-as-shown and actual timing, stage timings (finalize/load/decode/insert), per-segment audio/decode/chars/ok, config, resolved backend, host fingerprint, and outcome/error stage.
+- [x] **LED-03**: Prediction metadata is stored: source (prior/calibrated/mid-run), key level, n, confidence, time shown, and revisions.
+- [x] **LED-04**: No transcript text, prompts, hotwords, paths, argv, hostname, username, or clipboard content is stored; enforced by an allowlist serialization test plus a regex scan.
+- [x] **LED-05**: A `source` discriminator and TTS fields are reserved in schema v1; no TTS data is written yet.
+- [x] **LED-06**: `VOICE_METRICS=off` kill switch; documented deletion procedure; directories `0700` / files `0600`; tests never write to real state or runtime directories.
+- [x] **LED-07**: Character counts only — never words and never text.
 
 ### Decode Timing (DEC)
 
-- [ ] **DEC-01**: `decode_ms` covers full generator consumption, not the `model.transcribe()` call.
-- [ ] **DEC-02**: Per-segment decoder evidence is recorded (temperature/fallbacks, avg_logprob, compression ratio, no_speech probability, VAD duration) to flag outliers.
-- [ ] **DEC-03**: Instrumentation covers both the primary and the GPU→CPU fallback paths.
-- [ ] **DEC-04**: Monotonic clocks measure durations, epoch seconds carry cross-process timestamps, and QML never subtracts a Python timestamp from its own clock.
+- [x] **DEC-01**: `decode_ms` covers full generator consumption, not the `model.transcribe()` call.
+- [x] **DEC-02**: Per-segment decoder evidence is recorded (temperature/fallbacks, avg_logprob, compression ratio, no_speech probability, VAD duration) to flag outliers.
+- [x] **DEC-03**: Instrumentation covers both the primary and the GPU→CPU fallback paths.
+- [x] **DEC-04**: Monotonic clocks measure durations, epoch seconds carry cross-process timestamps, and QML never subtracts a Python timestamp from its own clock.
 
 ### Status Contract (STS)
 
-- [ ] **STS-01**: The worker writes `status.json` atomically at every transition and after each segment; schema v1, at most ~1 KB.
-- [ ] **STS-02**: Fields: `schema`, `pid`, `run_id`, `state` (PID vocabulary), `phase`, `started_at`, `updated_at`, `expires_at`, `audio_s`, `segments`, `segments_done`, `eta_epoch`, `eta_remaining_s`, `eta_confidence`, `eta_source`, `overrun`, `report_path`.
-- [ ] **STS-03**: The first ETA is available within 100 ms of entering `transcribing`, before model load.
-- [ ] **STS-04**: The PID file remains the authority; `status.json` is advisory; deleting it never changes bar state.
-- [ ] **STS-05**: A terminal exit removes `status.json`; `expires_at` prevents stale rendering after a crash.
+- [x] **STS-01**: The worker writes `status.json` atomically at every transition and after each segment; schema v1, at most ~1 KB.
+- [x] **STS-02**: Fields: `schema`, `pid`, `run_id`, `state` (PID vocabulary), `phase`, `started_at`, `updated_at`, `expires_at`, `audio_s`, `segments`, `segments_done`, `eta_epoch`, `eta_remaining_s`, `eta_confidence`, `eta_source`, `overrun`, `report_path`.
+- [x] **STS-03**: The first ETA is available within 100 ms of entering `transcribing`, before model load.
+- [x] **STS-04**: The PID file remains the authority; `status.json` is advisory; deleting it never changes bar state.
+- [x] **STS-05**: A terminal exit removes `status.json`; `expires_at` prevents stale rendering after a crash.
 
 ### Predictor & ETA (ETA)
 
@@ -137,27 +137,27 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FND-01 | 6 | Pending |
-| FND-02 | 6 | Pending |
-| FND-03 | 6 | Pending |
-| FND-04 | 6 | Pending |
-| FND-05 | 6 | Pending |
-| LED-01 | 6 | Pending |
-| LED-02 | 6 | Pending |
-| LED-03 | 6 | Pending |
-| LED-04 | 6 | Pending |
-| LED-05 | 6 | Pending |
-| LED-06 | 6 | Pending |
-| LED-07 | 6 | Pending |
-| DEC-01 | 6 | Pending |
-| DEC-02 | 6 | Pending |
-| DEC-03 | 6 | Pending |
-| DEC-04 | 6 | Pending |
-| STS-01 | 6 | Pending |
-| STS-02 | 6 | Pending |
-| STS-03 | 6 | Pending |
-| STS-04 | 6 | Pending |
-| STS-05 | 6 | Pending |
+| FND-01 | 6 | Complete |
+| FND-02 | 6 | Complete |
+| FND-03 | 6 | Complete |
+| FND-04 | 6 | Complete |
+| FND-05 | 6 | Complete |
+| LED-01 | 6 | Complete |
+| LED-02 | 6 | Complete |
+| LED-03 | 6 | Complete |
+| LED-04 | 6 | Complete |
+| LED-05 | 6 | Complete |
+| LED-06 | 6 | Complete |
+| LED-07 | 6 | Complete |
+| DEC-01 | 6 | Complete |
+| DEC-02 | 6 | Complete |
+| DEC-03 | 6 | Complete |
+| DEC-04 | 6 | Complete |
+| STS-01 | 6 | Complete |
+| STS-02 | 6 | Complete |
+| STS-03 | 6 | Complete |
+| STS-04 | 6 | Complete |
+| STS-05 | 6 | Complete |
 | ETA-01 | 7 | Pending |
 | ETA-02 | 7 | Pending |
 | ETA-03 | 7 | Pending |

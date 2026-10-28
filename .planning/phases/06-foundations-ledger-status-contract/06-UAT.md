@@ -9,7 +9,7 @@ source:
   - 06-05-SUMMARY.md
   - 06-06-SUMMARY.md
 started: 2026-10-28T17:17:49Z
-updated: 2026-10-29T00:18:30Z
+updated: 2026-10-29T01:07:00Z
 ---
 ## Current Test
 
@@ -40,21 +40,19 @@ result: pass
 
 ### 6. Terminal Outcome on Error/Cancel
 expected: If recording is cancelled or an error occurs, the ledger still gets a terminal row with the appropriate outcome (cancelled/error/abandoned). Status.json and PID file are cleaned up on all exit paths.
-result: issue
-reported: "Plan 06-06 was not implemented in code (only summary markdown was committed in c187a4d). finalize_background_run and reconcile_abandoned_run are missing."
-severity: blocker
+result: pass
+note: "Resolved via Plan 06-07: finalize_background_run single authority, watchdog_timeout terminal row, and reconcile_abandoned_run under flock."
 
 ### 7. Early Model Loading and Incremental Transcription
 expected: Whisper model loads in background while recording is active; audio chunks are transcribed concurrently via a consumer thread during recording rather than cold-starting sequentially after stop.
-result: issue
-reported: "Plan 06-05 was not implemented in code: WhisperModel still loads after recording stops, and chunks are transcribed sequentially after stop rather than concurrently in a background queue during recording."
-severity: blocker
+result: pass
+note: "Resolved via Plan 06-07: transcribe_timed with generator timing, TranscriptionEvidence, Recorder.on_chunk_ready, and worker _consume queue thread."
 
 ## Summary
 
 total: 7
-passed: 5
-issues: 2
+passed: 7
+issues: 0
 pending: 0
 skipped: 0
 
@@ -79,7 +77,7 @@ skipped: 0
 
 - gap_id: G-06-6
   truth: "Every worker process ends in exactly one terminal ledger row (success, cancelled, error, watchdog_timeout); watchdog expiry writes its own row and clears status/PID before exit; SIGKILLed runs are reconciled by next invocation as abandoned"
-  status: failed
+  status: resolved
   reason: "User reported / audit found: Plan 06-06 code was never implemented (commit c187a4d only committed 06-06-SUMMARY.md). finalize_background_run and reconcile_abandoned_run are absent."
   severity: blocker
   test: 6
@@ -94,10 +92,12 @@ skipped: 0
     - "watchdog terminal row written before os._exit(1)"
     - "reconcile_abandoned_run() called under toggle flock"
     - "tests/test_lifecycle_outcomes.py test suite"
+  resolved_by: "commit eb3f184"
+  resolved_at: 2026-10-29
 
 - gap_id: G-06-7
   truth: "The Whisper model loads while recording is in progress (D-05) and completed chunks are transcribed incrementally via a background consumer queue while recording continues (D-06); full generator consumption is timed (DEC-01) and evidence recorded (D-07)"
-  status: failed
+  status: resolved
   reason: "User reported: early model loading and parallel/incremental chunk transcription was planned but not working. Verified: commit c187a4d committed 06-05-SUMMARY.md without writing the code in voice.py or tests."
   severity: blocker
   test: 7
@@ -115,3 +115,5 @@ skipped: 0
     - "Worker queue consumer thread (_consume) for early model loading and concurrent chunk decoding during capture"
     - "tests/test_timing.py with generator timing, evidence aggregation, and fallback tests"
     - "tests/test_incremental_transcription.py with concurrent chunk decoding and early load tests"
+  resolved_by: "commit eb3f184"
+  resolved_at: 2026-10-29

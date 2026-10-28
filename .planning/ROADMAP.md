@@ -26,7 +26,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 
 **Milestone Goal:** Show a trustworthy single-number ETA during transcription, and record prediction-vs-actual telemetry so the estimator improves over time and stays portable across CPU/CUDA hardware and model configurations.
 
-- [ ] **Phase 6: Foundations, Ledger & Status Contract** - Freeze the schema and status contract, fix lifecycle races, and instrument honest stage timings.
+- [x] **Phase 6: Foundations, Ledger & Status Contract** - Freeze the schema and status contract, fix lifecycle races, and instrument honest stage timings.
 - [ ] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate.
 - [ ] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports.
 - [ ] **Phase 9: Quickshell ETA Integration** - Replace "Transcribing..." with a glanceable countdown and a click that opens the report.
@@ -46,23 +46,25 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
   4. `status.json` is published atomically at every transition and within 100 ms of entering transcribing, using monotonic durations and epoch cross-process timestamps; deleting it never changes the bar's state because the PID file remains the authority, and stale snapshots expire.
   5. The ledger records character counts only and contains no transcript text, prompts, hotwords, clipboard content, hostnames, usernames, or paths; directories are `0700` and files `0600`; `VOICE_METRICS=off` stops all telemetry writes.
 
-**Plans:** 6 plans
+**Plans:** 7/7 plans complete
 Plans:
+- [x] 06-07-PLAN.md
+
 **Wave 1**
-- [ ] 06-01-PLAN.md — Tracer: one run → one ledger row + status publish/remove end-to-end, telemetry seam, import-light CLI
+- [x] 06-01-PLAN.md — Tracer: one run → one ledger row + status publish/remove end-to-end, telemetry seam, import-light CLI
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 06-02-PLAN.md — Freeze ledger schema v1: allowlisted builder, privacy tests, TTS-reserved fields, rotation, docs
-- [ ] 06-03-PLAN.md — Close duplicate-worker race and torn PID reads: flock around toggle, atomic PID writes, ownership gate
+- [x] 06-02-PLAN.md — Freeze ledger schema v1: allowlisted builder, privacy tests, TTS-reserved fields, rotation, docs
+- [x] 06-03-PLAN.md — Close duplicate-worker race and torn PID reads: flock around toggle, atomic PID writes, ownership gate
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 06-04-PLAN.md — Publish status contract v1: atomic status.json at every transition, 5 s heartbeat, prior ETA, expiry
+- [x] 06-04-PLAN.md — Publish status contract v1: atomic status.json at every transition, 5 s heartbeat, prior ETA, expiry
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 06-05-PLAN.md — Honest timing: timed transcription seam, per-chunk evidence, early model load, incremental decoding
+- [x] 06-05-PLAN.md — Honest timing: timed transcription seam, per-chunk evidence, early model load, incremental decoding
 
 **Wave 5** *(blocked on Wave 4 completion)*
-- [ ] 06-06-PLAN.md — Every exit truthful: shared finalize authority, watchdog row, abandoned-run reconciliation
+- [x] 06-06-PLAN.md — Every exit truthful: shared finalize authority, watchdog row, abandoned-run reconciliation
 
 ### Phase 7: ETA Engine & Calibration
 
@@ -76,7 +78,17 @@ Plans:
   4. After 20 runs on this machine, the ETA's median absolute error against "text begins inserting" is at or below 20%, while failed, fallback, cold, contended, and outlier runs are excluded from fitting but kept in the ledger.
   5. `--status --json` exposes state, phase, ETA, source, and confidence; `--reset-calibration` returns the estimator to prior-based numbers; `VOICE_ETA=off` hides the ETA without affecting transcription.
 
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+**Wave 1**
+- [ ] 07-01-PLAN.md — Estimator Core (Formula, Priors, Keying)
+
+**Wave 2** *(blocked on Wave 1)*
+- [ ] 07-02-PLAN.md — Mid-Run Correction & Display Rules
+
+**Wave 3** *(blocked on Wave 1,2)*
+- [ ] 07-03-PLAN.md — Calibration, CLI Flags, Status Exposure
 
 ### Phase 8: Accuracy Report & Click-Through
 
@@ -133,8 +145,8 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 3. Text-to-Speech & Model Asset Pipeline | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 4. Hyprland Integration & Daemon Lifecycle | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 5. End-to-End System Verification | v1.0 | 2/2 | Complete | 2026-09-19 |
-| 6. Foundations, Ledger & Status Contract | v1.1 | 0/0 | Not started | - |
-| 7. ETA Engine & Calibration | v1.1 | 0/0 | Not started | - |
+| 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
+| 7. ETA Engine & Calibration | v1.1 | 0/3 | Not started | - |
 | 8. Accuracy Report & Click-Through | v1.1 | 0/0 | Not started | - |
 | 9. Quickshell ETA Integration | v1.1 | 0/0 | Not started | - |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |

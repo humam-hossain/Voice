@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v1.1
 milestone_name: Latency Prediction & Telemetry
-current_phase: 06
-current_phase_name: Foundations, Ledger & Status Contract
-status: executing
-stopped_at: Phase 6 not started — v1.1 roadmap created
-last_updated: "2026-10-28T14:00:58.159Z"
-last_activity: 2026-10-26
-last_activity_desc: Roadmap created for milestone v1.1 (Phases 6-10)
-state_head: 8e63d22fb99b782615b224c2ae3f814abe71a3c7
+current_phase: 07
+current_phase_name: ETA Engine & Calibration
+status: planning
+stopped_at: Phase 06 complete, ready to plan Phase 07
+last_updated: "2026-10-28T19:09:52.656Z"
+last_activity: 2026-10-29
+last_activity_desc: Phase 06 complete, transitioned to Phase 07
+state_head: eb3f18452b9e363e7ea4129a5978a7bf272fa3a9
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 6
-  completed_plans: 0
-  percent: 0
+  completed_phases: 6
+  total_plans: 10
+  completed_plans: 7
+  percent: 60
 ---
 
 # Project State
@@ -25,20 +25,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-19)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Phase 6 — Foundations, Ledger & Status Contract
+**Current focus:** Phase 07 — ETA Engine & Calibration
 
 ## Current Position
 
-Phase: 6 (Foundations, Ledger & Status Contract) — READY TO EXECUTE
-Plan: — (not planned)
-Status: Ready to execute
-Last activity: 2026-10-26 — Created the v1.1 roadmap; all 48 requirements mapped to Phases 6–10
+Phase: 07 — ETA Engine & Calibration
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-29 — Phase 06 complete, transitioned to Phase 07
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
+
 - v1.0 baseline: 10 plans across 5 phases (archived)
 - v1.1 plans completed: 0
 - Average duration: —
@@ -48,13 +49,14 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 06 | TBD | - | - |
+| 06 | 7 | - | - |
 | 07 | TBD | - | - |
 | 08 | TBD | - | - |
 | 09 | TBD | - | - |
 | 10 | TBD | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: v1.0 archived
 - Trend: Not started
 
@@ -94,7 +96,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-10-26
-Stopped at: v1.1 roadmap created — Phase 6 ready to plan
+Stopped at: Phase 06 complete, ready to plan Phase 07
 Resume file: None
 
 ## Operator Next Steps
