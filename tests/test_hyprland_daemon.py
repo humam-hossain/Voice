@@ -292,7 +292,7 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model") as mock_load, \
-             patch("voice.transcribe") as mock_transcribe:
+             patch("voice.transcribe_timed") as mock_transcribe:
 
             def trigger_term():
                 if voice.signal.SIGTERM in handlers:
@@ -301,13 +301,28 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
             with patch("time.sleep", side_effect=lambda _: trigger_term()):
                 ret = voice.run_background_recording(args)
                 self.assertEqual(ret, 0)
-                mock_load.assert_not_called()
                 mock_transcribe.assert_not_called()
 
         # Test stop on SIGUSR1: proceeds to transcribe and insert text
         handlers.clear()
         mock_recorder.recording = True
         mock_recorder.started_at = None
+        ev = voice.TranscriptionEvidence(
+            text="Hello world",
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         with patch("signal.signal", side_effect=fake_signal), \
              patch("voice.Recorder", return_value=mock_recorder), \
              patch("voice.play_cue"), \
@@ -315,7 +330,7 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model", return_value=MagicMock()) as mock_load, \
-             patch("voice.transcribe", return_value=("Hello world", MagicMock())) as mock_transcribe, \
+             patch("voice.transcribe_timed", return_value=ev) as mock_transcribe, \
              patch("voice.insert_text", return_value=True) as mock_insert:
 
             def trigger_usr1():
@@ -412,6 +427,22 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
         def stop_recording(_seconds):
             handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
 
+        ev = voice.TranscriptionEvidence(
+            text="Done",
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         with patch.dict(os.environ, {"VOICE_STT_TIMEOUT_SECONDS": "42"}), \
              patch("signal.signal", side_effect=fake_signal), \
              patch("voice.parse_device", return_value=None), \
@@ -422,7 +453,7 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model", return_value=MagicMock()), \
-             patch("voice.transcribe", return_value=("Done", MagicMock())), \
+             patch("voice.transcribe_timed", return_value=ev), \
              patch("voice.insert_text", return_value=True), \
              patch("voice.threading.Timer", return_value=mock_timer) as mock_timer_factory, \
              patch("time.sleep", side_effect=stop_recording):
@@ -432,7 +463,10 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
         self.assertEqual(mock_timer_factory.call_args.args[0], 42.0)
         self.assertIs(mock_timer_factory.call_args.args[1], voice.transcription_watchdog_handler)
         watchdog_args = mock_timer_factory.call_args.kwargs["args"]
-        self.assertEqual(watchdog_args[:4], [os.getpid(), args, wav_path, 42.0])
+        pid_or_state = watchdog_args[0]
+        actual_pid = pid_or_state["pid"] if isinstance(pid_or_state, dict) else pid_or_state
+        self.assertEqual(actual_pid, os.getpid())
+        self.assertEqual(watchdog_args[1:4], [args, wav_path, 42.0])
         self.assertIsInstance(watchdog_args[4], float)
         self.assertIsInstance(watchdog_args[5], voice.threading.Event)
         mock_timer.start.assert_called_once()
@@ -484,6 +518,22 @@ class TestDesktopNotificationBehavior(TempXdgTestCase):
         mock_recorder.start.side_effect = lambda: setattr(mock_recorder, "started_at", time.monotonic())
         mock_recorder.stop_to_wav.return_value = (Path("/tmp/test.wav"), 1.0, False)
 
+        ev_normal = voice.TranscriptionEvidence(
+            text="Normal dictation text",
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         with patch("signal.signal", side_effect=fake_signal), \
              patch("voice.Recorder", return_value=mock_recorder), \
              patch("voice.play_cue"), \
@@ -491,7 +541,7 @@ class TestDesktopNotificationBehavior(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model"), \
-             patch("voice.transcribe", return_value=("Normal dictation text", MagicMock())), \
+             patch("voice.transcribe_timed", return_value=ev_normal), \
              patch("voice.insert_text", return_value=True), \
              patch("voice.notify") as mock_notify:
 
@@ -517,6 +567,22 @@ class TestDesktopNotificationBehavior(TempXdgTestCase):
         mock_recorder.started_at = 1000.0
         mock_recorder.stop_to_wav.return_value = (Path("/tmp/test.wav"), 1.0, False)
 
+        ev_empty = voice.TranscriptionEvidence(
+            text="",
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         # 1. No speech detected -> exceptional toast
         with patch("signal.signal", side_effect=fake_signal), \
              patch("voice.Recorder", return_value=mock_recorder), \
@@ -525,7 +591,7 @@ class TestDesktopNotificationBehavior(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model"), \
-             patch("voice.transcribe", return_value=("", MagicMock())), \
+             patch("voice.transcribe_timed", return_value=ev_empty), \
              patch("voice.notify") as mock_notify:
 
             def trigger_usr1():
@@ -546,7 +612,7 @@ class TestDesktopNotificationBehavior(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model"), \
-             patch("voice.transcribe", return_value=("", MagicMock())), \
+             patch("voice.transcribe_timed", return_value=ev_empty), \
              patch("voice.max_recording_seconds", return_value=0.01), \
              patch("voice.notify") as mock_notify:
             with patch("time.monotonic", advancing_monotonic(1000.0, 0.01)):

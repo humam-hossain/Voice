@@ -127,13 +127,29 @@ class TestAudioChunking(TempXdgTestCase):
 
         transcribe_calls = []
 
-        def fake_transcribe(model_state, wav_path, call_args, initial_prompt=None):
+        def fake_transcribe(model_state, wav_path, call_args, initial_prompt=None, audio_s=None):
             transcribe_calls.append((wav_path, initial_prompt))
+            t = "Part three."
             if wav_path == chunk1:
-                return "Part one.", model_state
-            if wav_path == chunk2:
-                return "Part two.", model_state
-            return "Part three.", model_state
+                t = "Part one."
+            elif wav_path == chunk2:
+                t = "Part two."
+            return voice.TranscriptionEvidence(
+                text=t,
+                model_state=model_state,
+                decode_ms=10.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=3.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=3.0,
+            )
 
         with patch("signal.signal", side_effect=fake_signal), \
              patch("voice.Recorder", return_value=mock_recorder), \
@@ -142,7 +158,7 @@ class TestAudioChunking(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model", return_value=MagicMock()), \
-             patch("voice.transcribe", side_effect=fake_transcribe), \
+             patch("voice.transcribe_timed", side_effect=fake_transcribe), \
              patch("voice.insert_text", return_value=True) as mock_insert, \
              patch("time.sleep", side_effect=lambda _: trigger_usr1()):
 
@@ -191,12 +207,26 @@ class TestAudioChunking(TempXdgTestCase):
             if voice.signal.SIGUSR1 in handlers:
                 handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
 
-        def fake_transcribe(model_state, wav_path, call_args, initial_prompt=None):
-            if wav_path == chunk1:
-                return "Beginning of talk.", model_state
+        def fake_transcribe(model_state, wav_path, call_args, initial_prompt=None, audio_s=None):
             if wav_path == chunk2:
                 raise RuntimeError("CTranslate2 OOM or corrupted audio")
-            return "Conclusion of talk.", model_state
+            t = "Beginning of talk." if wav_path == chunk1 else "Conclusion of talk."
+            return voice.TranscriptionEvidence(
+                text=t,
+                model_state=model_state,
+                decode_ms=10.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=3.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=3.0,
+            )
 
         with patch("signal.signal", side_effect=fake_signal), \
              patch("voice.Recorder", return_value=mock_recorder), \
@@ -205,7 +235,7 @@ class TestAudioChunking(TempXdgTestCase):
              patch("voice.write_pid_state"), \
              patch("voice.remove_pid"), \
              patch("voice.load_model", return_value=MagicMock()), \
-             patch("voice.transcribe", side_effect=fake_transcribe), \
+             patch("voice.transcribe_timed", side_effect=fake_transcribe), \
              patch("voice.report_stt_failure") as mock_report, \
              patch("voice.insert_text", return_value=True) as mock_insert, \
              patch("time.sleep", side_effect=lambda _: trigger_usr1()):

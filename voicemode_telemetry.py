@@ -527,15 +527,15 @@ STATUS_HEARTBEAT_S = 5.0
 STATUS_TTL_S = 30.0
 STATUS_MAX_BYTES = 1024
 
-PRIOR_RTF = {"tiny": 0.25, "base": 0.35, "small": 0.55, "medium": 0.95, "large": 1.6}
+PRIOR_RTF = {"tiny": 0.25, "base": 0.35, "small": 0.55, "medium": 0.95, "large": 1.6, "turbo": 1.0}
 PRIOR_FINALIZE_S = 0.4
 PRIOR_LOAD_S = 1.2
 PRIOR_INSERT_S = 0.2
 
 
-def prior_eta_seconds(audio_s, model):
+def prior_eta_seconds(audio_s, model=None):
     try:
-        model_str = str(model).lower()
+        model_str = str(model).lower() if model is not None else "medium"
         prefix = model_str.split(".")[0].split("-")[0]
         rtf = PRIOR_RTF.get(prefix, PRIOR_RTF["medium"])
         return round(PRIOR_FINALIZE_S + PRIOR_LOAD_S + rtf * max(0.0, float(audio_s)) + PRIOR_INSERT_S, 2)
@@ -680,3 +680,199 @@ def status_expired(status, now=None):
         return True
 
 
+
+
+# ETA/Calibration (Phase 7)
+CALIBRATION_FILENAME = "calibration.json"
+
+
+def get_calibration_path() -> Path:
+    return get_metrics_dir() / CALIBRATION_FILENAME
+
+
+def reset_calibration() -> bool:
+    try:
+        p = get_calibration_path()
+        if p.exists():
+            p.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def load_calibration():
+    try:
+        p = get_calibration_path()
+        if not p.exists():
+            return {}
+        content = p.read_text()
+        data = json.loads(content)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_calibration(data: dict) -> bool:
+    try:
+        p = get_calibration_path()
+        atomic_write_json(p, data, 0o600)
+        return True
+    except Exception:
+        return False
+
+
+def _is_calibration_excluded(record: dict) -> bool:
+    try:
+        outcome = record.get("outcome")
+        if outcome in {"error", "cancelled", "watchdog_timeout", "abandoned"}:
+            return True
+        if record.get("fallback_used"):
+            return True
+        config = record.get("config") or {}
+        if config.get("device") == "cuda" and record.get("outcome") != "success":
+            # exclude if fallback/failed in some cases - be conservative
+            pass
+    except Exception:
+        pass
+    return False
+
+
+def fit_calibration_from_ledger(max_runs: int = 1000):
+    """Fit calibration from ledger. Excludes failures/fallbacks/outliers/cold/high-load from fitting but keeps records."""
+    cal = load_calibration()
+    # Build buckets by calibration_key
+    buckets = {}
+    try:
+        for rec in read_ledger_rows():
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("source") != "stt":
+                continue
+            if _is_calibration_excluded(rec):
+                continue
+            key = rec.get("calibration_key") or calibration_key(rec.get("backend"), rec.get("config") or {})
+            if not key:
+                continue
+            actual = rec.get("actual") or {}
+            total_ms = actual.get("total_ms")
+            audio_s = rec.get("audio_s")
+            if total_ms is None or audio_s is None:
+                continue
+            try:
+                if float(audio_s) <= 0:
+                    continue
+            except Exception:
+                continue
+            buckets.setdefault(key, []).append({
+                "total_ms": float(total_ms),
+                "audio_s": float(audio_s),
+                "predicted": rec.get("predicted") or {}
+            })
+    except Exception:
+        pass
+    
+    # Fit ratio-of-sums style rates per component
+    for key, samples in buckets.items():
+        if len(samples) < 3:  # min n=3
+            continue
+        # Compute ratio of sums for rate component: (sum total - sum fixed)/sum audio
+        sum_audio = sum(s["audio_s"] for s in samples)
+        sum_total_ms = sum(s["total_ms"] for s in samples)
+        # Use priors as baseline fixed components, compute effective rate
+        rtf_eff = (sum_total_ms / 1000.0 - (PRIOR_FINALIZE_S + PRIOR_LOAD_S + PRIOR_INSERT_S)) / sum_audio if sum_audio > 0 else PRIOR_RTF.get("medium", 0.95)
+        if rtf_eff < 0.01 or rtf_eff > 10.0:
+            continue  # outlier
+        # median-based smoothing
+        try:
+            rtf_vals = [(s["total_ms"] / 1000.0 - (PRIOR_FINALIZE_S + PRIOR_LOAD_S + PRIOR_INSERT_S)) / s["audio_s"] if s["audio_s"] > 0 else None for s in samples]
+            rtf_vals = [v for v in rtf_vals if v is not None and 0.01 < v < 10.0]
+            if len(rtf_vals) >= 3:
+                import statistics
+                med = statistics.median(rtf_vals)
+                # shrinkage toward prior
+                rtf_eff = 0.7 * med + 0.3 * PRIOR_RTF.get("medium", 0.95)
+        except Exception:
+            pass
+        cal[key] = {
+            "rtf": round(float(rtf_eff), 4),
+            "n": len(samples),
+            "finalize_s": PRIOR_FINALIZE_S,
+            "load_s": PRIOR_LOAD_S,
+            "insert_s": PRIOR_INSERT_S,
+            "updated_at": time.time()
+        }
+    save_calibration(cal)
+    return cal
+
+
+def calibrated_eta_seconds(audio_s, model=None, backend=None, config=None, calibration_key_val=None):
+    """Compute ETA with calibration. Returns (eta_seconds, source, key_level, n, confidence)."""
+    if os.getenv("VOICE_ETA", "").strip().lower() in {"0", "false", "no", "off", ""} and os.getenv("VOICE_ETA") is not None:
+        # If explicitly off
+        pass
+    cal = load_calibration()
+    if config is None:
+        config = {}
+    if calibration_key_val is None and backend is not None:
+        try:
+            calibration_key_val = calibration_key(backend, config)
+        except Exception:
+            calibration_key_val = None
+    
+    # Try full key first, then fallback hierarchy
+    key_level = None
+    n = 0
+    rtf = None
+    source = "prior"
+    confidence = "low"
+    
+    if calibration_key_val and calibration_key_val in cal:
+        entry = cal[calibration_key_val]
+        if entry.get("n", 0) >= 3:
+            rtf = entry.get("rtf")
+            n = entry.get("n")
+            key_level = calibration_key_val
+            source = "calibrated"
+            confidence = "medium" if n >= 10 else "low"
+    else:
+        # Try fallbacks by prefix
+        if calibration_key_val:
+            try:
+                parts = calibration_key_val.split("|")
+                # Try without some parts
+                for drop in range(1, len(parts)):
+                    k2 = "|".join(parts[:len(parts)-drop]) if drop > 0 else parts[0]
+                    if k2 in cal and cal[k2].get("n", 0) >= 3:
+                        entry = cal[k2]
+                        rtf = entry.get("rtf")
+                        n = entry.get("n")
+                        key_level = k2
+                        source = "calibrated"
+                        confidence = "low"
+                        break
+            except Exception:
+                pass
+    
+    if rtf is None:
+        # Use prior
+        try:
+            model_str = str(model).lower() if model is not None else "medium"
+            prefix = model_str.split(".")[0].split("-")[0]
+            rtf = PRIOR_RTF.get(prefix, PRIOR_RTF["medium"])
+        except Exception:
+            rtf = PRIOR_RTF.get("medium", 0.95)
+        source = "prior"
+        key_level = f"prior:{prefix if 'prefix' in locals() else 'medium'}"
+        n = 0
+        confidence = "low"
+    
+    try:
+        finalize_s = PRIOR_FINALIZE_S
+        load_s = PRIOR_LOAD_S
+        insert_s = PRIOR_INSERT_S
+        eta = finalize_s + load_s + float(rtf) * max(0.0, float(audio_s)) + insert_s
+        eta = round(max(0.0, float(eta)), 2)
+        return eta, source, key_level, n, confidence
+    except Exception:
+        eta = prior_eta_seconds(audio_s, model)
+        return eta, "prior", f"prior:{model}", 0, "low"

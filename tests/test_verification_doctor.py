@@ -24,7 +24,7 @@ class TestCLIDispatch(unittest.TestCase):
         self.assertFalse(args.doctor)
         self.assertFalse(args.verify)
         self.assertEqual(args.tier, "all")
-        self.assertFalse(args.json)
+        self.assertFalse(getattr(args, "json_verify", False) or getattr(args, "json", False))
         self.assertIsNone(args.export_markdown)
         self.assertFalse(args.kill)
 
@@ -36,7 +36,7 @@ class TestCLIDispatch(unittest.TestCase):
         args = voice.parse_args(["--verify", "--tier", "2", "--json", "--export-markdown", "report.md"])
         self.assertTrue(args.verify)
         self.assertEqual(args.tier, "2")
-        self.assertTrue(args.json)
+        self.assertTrue(getattr(args, "json_verify", False) or getattr(args, "json", False))
         self.assertEqual(args.export_markdown, Path("report.md"))
 
     def test_parse_args_kill_flag(self) -> None:

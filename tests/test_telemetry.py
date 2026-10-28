@@ -44,13 +44,29 @@ class TestTracerContract(TempXdgTestCase):
 
         model_state = MagicMock()
         seg_text = "hello world"
+        ev = voice.TranscriptionEvidence(
+            text=seg_text,
+            model_state=model_state,
+            decode_ms=15.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.23,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.23,
+        )
 
         with patch("signal.signal"), \
              patch("voice.Recorder", return_value=fake_recorder), \
              patch("voice.play_cue"), \
              patch("voice.play_cue_async"), \
              patch("voice.load_model", return_value=model_state), \
-             patch("voice.transcribe", return_value=(seg_text, model_state)), \
+             patch("voice.transcribe_timed", return_value=ev), \
              patch("voice.insert_text", return_value=True), \
              patch("voice.time.sleep"), \
              patch("time.monotonic", advancing_monotonic(1000.0, 0.01)):

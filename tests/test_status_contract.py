@@ -97,13 +97,29 @@ class TestStatusContract(TempXdgTestCase):
         fake_recorder.recording = True
         fake_recorder.stop_to_wav.return_value = ([Path('/tmp/x.wav')], 1.23, True)
         model_state = MagicMock()
+        ev = voice.TranscriptionEvidence(
+            text='hello',
+            model_state=model_state,
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.23,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.23,
+        )
         with patch('voicemode_telemetry.publish_status', side_effect=rec), \
              patch('signal.signal'), \
              patch('voice.Recorder', return_value=fake_recorder), \
              patch('voice.play_cue'), \
              patch('voice.play_cue_async'), \
              patch('voice.load_model', return_value=model_state), \
-             patch('voice.transcribe', return_value=('hello', model_state)), \
+             patch('voice.transcribe_timed', return_value=ev), \
              patch('voice.insert_text', return_value=True), \
              patch('voice.time.sleep'), \
              patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
@@ -118,9 +134,25 @@ class TestStatusContract(TempXdgTestCase):
     
     def test_first_eta_exists_before_model_load(self):
         captured = {}
-        def cap_load(args):
+        ev = voice.TranscriptionEvidence(
+            text='hello',
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=5.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=5.0,
+        )
+        def cap_decode(model_state, path, call_args, **kwargs):
             captured['status'] = voicemode_telemetry.read_status()
-            return MagicMock()
+            return ev
         args = voice.parse_args([])
         args.no_beep = True
         args.no_notify = True
@@ -133,8 +165,8 @@ class TestStatusContract(TempXdgTestCase):
              patch('voice.Recorder', return_value=fake_recorder), \
              patch('voice.play_cue'), \
              patch('voice.play_cue_async'), \
-             patch('voice.load_model', side_effect=cap_load), \
-             patch('voice.transcribe', return_value=('hello', MagicMock())), \
+             patch('voice.load_model', return_value=MagicMock()), \
+             patch('voice.transcribe_timed', side_effect=cap_decode), \
              patch('voice.insert_text', return_value=True), \
              patch('voice.time.sleep'), \
              patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
@@ -164,21 +196,40 @@ class TestStatusContract(TempXdgTestCase):
         fake_recorder.started_at = 1000.0
         fake_recorder.recording = True
         fake_recorder.stop_to_wav.return_value = ([Path('/tmp/x.wav')], 1.0, True)
+        handlers = {}
+        def fake_signal(sig, handler):
+            handlers[sig] = handler
         sleep_calls = [0]
         def sleep_fn(t):
             sleep_calls[0] += 1
             if sleep_calls[0] >= 3:
-                import os, signal
-                os.kill(os.getpid(), signal.SIGUSR1)
+                if voice.signal.SIGUSR1 in handlers:
+                    handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
             return
+        ev = voice.TranscriptionEvidence(
+            text='hi',
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         with patch('voicemode_telemetry.STATUS_HEARTBEAT_S', 0.0), \
              patch('voicemode_telemetry.publish_status', side_effect=rec), \
-             patch('signal.signal'), \
+             patch('signal.signal', side_effect=fake_signal), \
              patch('voice.Recorder', return_value=fake_recorder), \
              patch('voice.play_cue'), \
              patch('voice.play_cue_async'), \
              patch('voice.load_model', return_value=MagicMock()), \
-             patch('voice.transcribe', return_value=('hi', MagicMock())), \
+             patch('voice.transcribe_timed', return_value=ev), \
              patch('voice.insert_text', return_value=True), \
              patch('voice.time.sleep', side_effect=sleep_fn), \
              patch('time.monotonic', advancing_monotonic(1000.0, 0.001)):
@@ -198,10 +249,26 @@ class TestStatusContract(TempXdgTestCase):
         fake_recorder.started_at = 1000.0
         fake_recorder.recording = True
         fake_recorder.stop_to_wav.return_value = ([Path('/tmp/x.wav')], 1.0, True)
+        ev = voice.TranscriptionEvidence(
+            text='hi',
+            model_state=MagicMock(),
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=1.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=1.0,
+        )
         with patch('signal.signal'), patch('voice.Recorder', return_value=fake_recorder), \
              patch('voice.play_cue'), patch('voice.play_cue_async'), \
              patch('voice.load_model', return_value=MagicMock()), \
-             patch('voice.transcribe', return_value=('hi', MagicMock())), \
+             patch('voice.transcribe_timed', return_value=ev), \
              patch('voice.insert_text', return_value=True), \
              patch('voice.time.sleep'), patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
             voice.run_background_recording(args)
@@ -280,10 +347,26 @@ class TestStatusContract(TempXdgTestCase):
             fake_recorder.started_at = 1000.0
             fake_recorder.recording = True
             fake_recorder.stop_to_wav.return_value = ([Path('/tmp/x.wav')], 1.0, True)
+            ev = voice.TranscriptionEvidence(
+                text='hi',
+                model_state=MagicMock(),
+                decode_ms=10.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=1.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=1.0,
+            )
             with patch('signal.signal'), patch('voice.Recorder', return_value=fake_recorder), \
                  patch('voice.play_cue'), patch('voice.play_cue_async'), \
                  patch('voice.load_model', return_value=MagicMock()), \
-                 patch('voice.transcribe', return_value=('hi', MagicMock())), \
+                 patch('voice.transcribe_timed', return_value=ev), \
                  patch('voice.insert_text', return_value=True), \
                  patch('voice.time.sleep'), patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
                 voice.run_background_recording(args)

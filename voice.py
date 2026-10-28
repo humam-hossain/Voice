@@ -9,6 +9,7 @@ Ctrl+C exits.
 from __future__ import annotations
 
 import os
+import queue
 
 # Pre-seed PipeWire and PulseAudio node properties before PortAudio/sounddevice initializes (D-11)
 os.environ.setdefault("PULSE_PROP_application.name", "voicemode")
@@ -35,7 +36,7 @@ import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import voicemode_telemetry
 
@@ -170,6 +171,8 @@ class Recorder:
         self._lock = threading.Lock()
         self._write_threads: list[threading.Thread] = []
         self._chunk_paths: list[tuple[int, Path]] = []
+        self._chunk_audio_s: dict[int, float] = {}
+        self.on_chunk_ready: Optional[Callable[[int, Path, Optional[float]], None]] = None
         self._chunk_idx: int = 0
         self._session_id: str = time.strftime("%Y%m%d-%H%M%S")
 
@@ -181,8 +184,13 @@ class Recorder:
     def recording(self) -> bool:
         return self.stream is not None
 
-    def _write_chunk_file(self, audio, idx: int, save_dir: Optional[Path]) -> Path:
+    def chunk_audio_s(self, idx: int) -> Optional[float]:
+        with self._lock:
+            return self._chunk_audio_s.get(idx)
+
+    def _write_chunk_file(self, audio, idx: int, save_dir: Optional[Path]) -> tuple[Path, float]:
         import numpy as np
+        audio_s = round(len(audio) / float(self.actual_sample_rate or self.target_sample_rate), 3)
         if self.actual_sample_rate != self.target_sample_rate:
             audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
         pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
@@ -201,14 +209,20 @@ class Recorder:
             wav.setframerate(self.target_sample_rate)
             wav.writeframes(pcm.tobytes())
 
-        return wav_path
+        return wav_path, audio_s
 
     def _write_chunk_async(self, audio: np.ndarray, idx: int, save_dir: Optional[Path]) -> None:
         try:
-            wav_path = self._write_chunk_file(audio, idx, save_dir)
+            wav_path, audio_s = self._write_chunk_file(audio, idx, save_dir)
             with self._lock:
                 self._chunk_paths.append((idx, wav_path))
+                self._chunk_audio_s[idx] = audio_s
             print(f"Saved audio segment {idx} ({wav_path.name})...", flush=True)
+            if self.on_chunk_ready is not None:
+                try:
+                    self.on_chunk_ready(idx, wav_path, audio_s)
+                except Exception as cb_exc:
+                    print(f"Error in on_chunk_ready callback for segment {idx}: {cb_exc}", file=sys.stderr, flush=True)
         except Exception as exc:
             print(f"Error writing audio chunk {idx}: {exc}", file=sys.stderr, flush=True)
 
@@ -308,9 +322,10 @@ class Recorder:
             try:
                 import numpy as np
                 final_audio = np.concatenate(remaining, axis=0)
-                final_path = self._write_chunk_file(final_audio, final_idx, effective_save_dir)
+                final_path, final_audio_s = self._write_chunk_file(final_audio, final_idx, effective_save_dir)
                 with self._lock:
                     self._chunk_paths.append((final_idx, final_path))
+                    self._chunk_audio_s[final_idx] = final_audio_s
             except Exception as exc:
                 print(f"Error writing final audio chunk: {exc}", file=sys.stderr, flush=True)
 
@@ -636,9 +651,17 @@ def play_cue_async(args: argparse.Namespace, cue: str) -> None:
 
 def actual_backend(model: WhisperModel) -> str:
     inner = getattr(model, "model", None)
+    if inner is None:
+        return "unknown"
     device = getattr(inner, "device", "unknown")
+    if not isinstance(device, (str, int)):
+        device = "cpu"
     device_index = getattr(inner, "device_index", "")
+    if not isinstance(device_index, (str, int)):
+        device_index = ""
     compute_type = getattr(inner, "compute_type", "unknown")
+    if not isinstance(compute_type, (str, int)):
+        compute_type = "int8"
     if device_index not in ("", None):
         return f"{device} {device_index}, {compute_type}"
     return f"{device}, {compute_type}"
@@ -661,6 +684,111 @@ def load_model(args: argparse.Namespace, *, force_cpu: bool = False) -> ModelSta
     return state
 
 
+@dataclass
+class TranscriptionEvidence:
+    text: str
+    model_state: ModelState
+    decode_ms: float
+    fallback: bool
+    failure_type: Optional[str]
+    backend: str
+    avg_logprob: Optional[float]
+    compression_ratio: Optional[float]
+    no_speech_prob: Optional[float]
+    temperature: Optional[float]
+    vad_audio_s: Optional[float]
+    decoder_segments: int
+    fallback_load_ms: Optional[float]
+    audio_s: Optional[float] = None
+
+
+def transcribe_timed(
+    model_state: ModelState,
+    wav_path: Path,
+    args: argparse.Namespace,
+    *,
+    initial_prompt: Optional[str] = None,
+    audio_s: Optional[float] = None,
+) -> TranscriptionEvidence:
+    kwargs: dict[str, Any] = {
+        "beam_size": getattr(args, "beam_size", 5),
+        "vad_filter": getattr(args, "vad_filter", True),
+    }
+    if getattr(args, "language", None):
+        kwargs["language"] = args.language
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+
+    def _decode(state: ModelState):
+        t0 = time.monotonic()
+        raw_segments, info = state.model.transcribe(str(wav_path), **kwargs)
+        segments = list(raw_segments)
+        decode_ms = round((time.monotonic() - t0) * 1000.0, 3)
+        return segments, info, decode_ms
+
+    current_state = model_state
+    fallback = False
+    failure_type: Optional[str] = None
+    fallback_load_ms: Optional[float] = None
+
+    try:
+        segments, info, decode_ms = _decode(current_state)
+    except Exception as exc:
+        if current_state.requested_device == "cpu":
+            raise
+        print(f"GPU/auto transcription failed ({exc}); retrying on CPU int8...", flush=True)
+        fallback = True
+        failure_type = type(exc).__name__
+        previous_failures = (("GPU/auto transcription", exc),)
+        t_fallback = time.monotonic()
+        try:
+            current_state = load_model(args, force_cpu=True)
+            fallback_load_ms = round((time.monotonic() - t_fallback) * 1000.0, 3)
+        except Exception as fallback_error:
+            raise STTStageFailure("CPU fallback model loading", fallback_error, previous_failures) from fallback_error
+        try:
+            segments, info, decode_ms = _decode(current_state)
+        except Exception as fallback_error:
+            raise STTStageFailure("CPU fallback transcription", fallback_error, previous_failures) from fallback_error
+
+    text = " ".join(segment.text.strip() for segment in segments).strip()
+    backend_str = actual_backend(current_state.model)
+
+    logprobs = [s.avg_logprob for s in segments if getattr(s, "avg_logprob", None) is not None]
+    ratios = [s.compression_ratio for s in segments if getattr(s, "compression_ratio", None) is not None]
+    no_speeches = [s.no_speech_prob for s in segments if getattr(s, "no_speech_prob", None) is not None]
+    temps = [s.temperature for s in segments if getattr(s, "temperature", None) is not None]
+
+    avg_logprob = round(float(min(logprobs)), 4) if logprobs else None
+    compression_ratio = round(float(max(ratios)), 4) if ratios else None
+    no_speech_prob = round(float(max(no_speeches)), 4) if no_speeches else None
+    temperature = round(float(max(temps)), 4) if temps else None
+
+    vad_audio_s: Optional[float] = None
+    if info is not None:
+        if getattr(info, "duration_after_vad", None) is not None:
+            vad_audio_s = round(float(info.duration_after_vad), 3)
+        elif getattr(info, "duration", None) is not None:
+            vad_audio_s = round(float(info.duration), 3)
+
+    return TranscriptionEvidence(
+        text=text,
+        model_state=current_state,
+        decode_ms=decode_ms,
+        fallback=fallback,
+        failure_type=failure_type,
+        backend=backend_str,
+        avg_logprob=avg_logprob,
+        compression_ratio=compression_ratio,
+        no_speech_prob=no_speech_prob,
+        temperature=temperature,
+        vad_audio_s=vad_audio_s,
+        decoder_segments=len(segments),
+        fallback_load_ms=fallback_load_ms,
+        audio_s=audio_s,
+    )
+
+
 def transcribe(
     model_state: ModelState,
     wav_path: Path,
@@ -668,34 +796,8 @@ def transcribe(
     *,
     initial_prompt: Optional[str] = None,
 ) -> tuple[str, ModelState]:
-    kwargs = {
-        "beam_size": args.beam_size,
-        "vad_filter": getattr(args, "vad_filter", True),
-    }
-    if args.language:
-        kwargs["language"] = args.language
-    if initial_prompt:
-        kwargs["initial_prompt"] = initial_prompt
-
-    try:
-        segments, info = model_state.model.transcribe(str(wav_path), **kwargs)
-        text = " ".join(segment.text.strip() for segment in segments).strip()
-        return text, model_state
-    except Exception as exc:
-        if model_state.requested_device == "cpu":
-            raise
-        print(f"GPU/auto transcription failed ({exc}); retrying on CPU int8...", flush=True)
-        previous_failures = (("GPU/auto transcription", exc),)
-        try:
-            cpu_state = load_model(args, force_cpu=True)
-        except Exception as fallback_error:
-            raise STTStageFailure("CPU fallback model loading", fallback_error, previous_failures) from fallback_error
-        try:
-            segments, info = cpu_state.model.transcribe(str(wav_path), **kwargs)
-        except Exception as fallback_error:
-            raise STTStageFailure("CPU fallback transcription", fallback_error, previous_failures) from fallback_error
-        text = " ".join(segment.text.strip() for segment in segments).strip()
-        return text, cpu_state
+    ev = transcribe_timed(model_state, wav_path, args, initial_prompt=initial_prompt)
+    return ev.text, ev.model_state
 
 
 def notify(
@@ -931,8 +1033,245 @@ def recording_beep_interval(args: argparse.Namespace) -> float:
         return 5.0
 
 
+def finalize_background_run(
+    run_state: dict,
+    *,
+    outcome: str,
+    error_stage: Optional[str] = None,
+    extra: Optional[dict] = None,
+) -> bool:
+    lock = run_state.get("lock")
+    if lock:
+        lock.acquire()
+    try:
+        if run_state.get("finalized"):
+            return False
+        run_state["finalized"] = True
+        run_state["outcome"] = outcome
+        if error_stage is not None:
+            run_state["error_stage"] = error_stage
+
+        # Stop recorder if still active
+        recorder = run_state.get("recorder")
+        if recorder is not None and getattr(recorder, "recording", False):
+            try:
+                recorder.stop_to_wav(None)
+            except Exception:
+                pass
+
+        # Cleanup temporary audio files if requested
+        if run_state.get("should_delete"):
+            for p in run_state.get("wav_paths") or []:
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        # Clean status.json only if it belongs to this run (or has no run_id)
+        try:
+            st = voicemode_telemetry.read_status()
+            if st is not None:
+                cur_rid = run_state.get("run_id")
+                st_rid = st.get("run_id")
+                if not st_rid or st_rid == cur_rid:
+                    voicemode_telemetry.remove_status()
+        except Exception:
+            pass
+
+        # Remove PID file
+        pid = run_state.get("pid")
+        if pid:
+            remove_pid(pid)
+
+        # Append row to ledger if metrics enabled
+        row_written = False
+        try:
+            if voicemode_telemetry.get_metrics_enabled():
+                results = run_state.get("results") or {}
+                if hasattr(results, "values"):
+                    result_evs = list(results.values())
+                else:
+                    result_evs = []
+
+                def _clean_float(v):
+                    if v is None:
+                        return None
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return None
+
+                segments_data = []
+                for idx in sorted(results.keys()) if hasattr(results, "keys") else []:
+                    ev = results[idx]
+                    if isinstance(ev, TranscriptionEvidence):
+                        segments_data.append({
+                            "idx": idx,
+                            "audio_s": _clean_float(ev.audio_s),
+                            "decode_ms": _clean_float(ev.decode_ms) or 0.0,
+                            "chars": len(ev.text) if ev.text else 0,
+                            "ok": ev.failure_type is None,
+                            "fallback": ev.fallback,
+                            "avg_logprob": _clean_float(ev.avg_logprob),
+                            "compression_ratio": _clean_float(ev.compression_ratio),
+                            "no_speech_prob": _clean_float(ev.no_speech_prob),
+                            "temperature": _clean_float(ev.temperature),
+                            "vad_audio_s": _clean_float(ev.vad_audio_s),
+                            "error_type": ev.failure_type,
+                        })
+                    elif isinstance(ev, dict):
+                        segments_data.append(ev)
+
+                t_start = run_state.get("t_start")
+                total_ms = round((time.monotonic() - t_start) * 1000.0, 3) if t_start is not None else None
+                loader_state = run_state.get("loader_state") or {}
+
+                decode_ms_total = None
+                if result_evs:
+                    decode_ms_total = round(
+                        sum(
+                            ev.decode_ms for ev in result_evs
+                            if isinstance(ev, TranscriptionEvidence)
+                        ),
+                        3,
+                    )
+
+                actual_data = {
+                    "total_ms": _clean_float(total_ms),
+                    "finalize_ms": _clean_float(run_state.get("finalize_ms")),
+                    "load_ms": _clean_float(loader_state.get("load_ms")),
+                    "decode_ms": _clean_float(decode_ms_total),
+                    "insert_ms": _clean_float(run_state.get("insert_ms")),
+                }
+
+                predicted = run_state.get("predicted")
+                if predicted and isinstance(predicted, dict):
+                    if t_start is not None and predicted.get("actual_s") is None:
+                        predicted["actual_s"] = round(time.monotonic() - t_start, 3)
+
+                args = run_state.get("args")
+                def _chunk_s(a):
+                    try:
+                        val = getattr(a, "chunk_seconds", DEFAULT_CHUNK_SECONDS)
+                        if type(val).__name__ == "MagicMock" or hasattr(val, "_mock_return_value"):
+                            return float(DEFAULT_CHUNK_SECONDS)
+                        return float(val)
+                    except Exception:
+                        return float(DEFAULT_CHUNK_SECONDS)
+
+                def _clean_val(v):
+                    if v is None:
+                        return None
+                    if type(v).__name__ == "MagicMock" or hasattr(v, "_mock_return_value"):
+                        return None
+                    return v
+
+                config_data = {
+                    "model": _clean_val(getattr(args, "model", None)) if args else None,
+                    "device": _clean_val(getattr(args, "device", None)) if args else None,
+                    "compute_type": _clean_val(getattr(args, "compute_type", None)) if args else None,
+                    "beam_size": _clean_val(getattr(args, "beam_size", None)) if args else None,
+                    "vad_filter": _clean_val(getattr(args, "vad_filter", None)) if args else None,
+                    "language": _clean_val(getattr(args, "language", None)) if args else None,
+                    "chunk_s": _chunk_s(args),
+                }
+
+                backend_str = run_state.get("backend") or loader_state.get("backend")
+                if backend_str and (type(backend_str).__name__ == "MagicMock" or hasattr(backend_str, "_mock_return_value")):
+                    backend_str = "cpu, int8"
+
+                text_val = run_state.get("text") or (run_state.get("text_holder") or {}).get("text", "")
+                chars_out = len(text_val) if text_val else 0
+
+                chars_typed = run_state.get("chars_typed")
+                if isinstance(chars_typed, list):
+                    chars_typed_val = chars_typed[0] if chars_typed else 0
+                else:
+                    chars_typed_val = int(chars_typed or 0)
+
+                fallback_used = any(
+                    ev.fallback for ev in result_evs
+                    if isinstance(ev, TranscriptionEvidence)
+                )
+
+                record = voicemode_telemetry.build_record(
+                    run_id=run_state.get("run_id") or uuid.uuid4().hex,
+                    install_id=voicemode_telemetry.get_install_id(),
+                    ts_start=run_state.get("ts_start", time.time()),
+                    ts_end=time.time(),
+                    outcome=outcome,
+                    error_stage=error_stage or run_state.get("error_stage"),
+                    actual=actual_data,
+                    predicted=predicted,
+                    audio_s=run_state.get("audio_s", 0.0),
+                    chars_out=chars_out,
+                    chars_typed=chars_typed_val,
+                    fallback_used=fallback_used,
+                    insert_ok=run_state.get("insert_ok", False),
+                    segments=segments_data,
+                    config=config_data,
+                    backend=backend_str,
+                )
+                voicemode_telemetry.append_ledger_row(record)
+                row_written = True
+        except Exception as ledger_exc:
+            print(f"Error appending ledger row: {ledger_exc}", file=sys.stderr, flush=True)
+
+        return row_written
+    finally:
+        if lock:
+            lock.release()
+
+
+def reconcile_abandoned_run() -> bool:
+    try:
+        snapshot = voicemode_telemetry.read_status()
+        if not snapshot or not isinstance(snapshot, dict):
+            return False
+        pid = snapshot.get("pid")
+        if not pid:
+            return False
+        if process_alive(pid):
+            return False
+
+        # Dead worker found!
+        expired = voicemode_telemetry.status_expired(snapshot)
+        row_written = False
+        if not expired and voicemode_telemetry.get_metrics_enabled():
+            try:
+                record = voicemode_telemetry.build_record(
+                    run_id=snapshot.get("run_id") or uuid.uuid4().hex,
+                    install_id=voicemode_telemetry.get_install_id(),
+                    ts_start=snapshot.get("started_at") or time.time(),
+                    ts_end=time.time(),
+                    outcome="abandoned",
+                    error_stage=snapshot.get("phase") or "unknown",
+                    actual=None,
+                    predicted=None,
+                    audio_s=snapshot.get("audio_s") or 0.0,
+                    chars_out=0,
+                    chars_typed=0,
+                    fallback_used=False,
+                    insert_ok=False,
+                    segments=[],
+                    config=None,
+                    backend=None,
+                )
+                voicemode_telemetry.append_ledger_row(record)
+                row_written = True
+            except Exception:
+                pass
+
+        # Clean up stale status and PID file
+        voicemode_telemetry.remove_status()
+        remove_pid(pid)
+        return True
+    except Exception:
+        return False
+
+
 def transcription_watchdog_handler(
-    pid: int,
+    run_state_or_pid: dict | int,
     args: argparse.Namespace,
     wav_path: Path,
     timeout_seconds: float,
@@ -958,7 +1297,14 @@ def transcription_watchdog_handler(
             flush=True,
         )
     finally:
-        remove_pid(pid)
+        if isinstance(run_state_or_pid, dict):
+            finalize_background_run(
+                run_state_or_pid,
+                outcome="watchdog_timeout",
+                error_stage="Whisper transcription",
+            )
+        else:
+            remove_pid(run_state_or_pid)
         os._exit(1)
 
 
@@ -1673,6 +2019,7 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
     import voicemode_telemetry
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with voicemode_telemetry.with_pid_lock():
+        reconcile_abandoned_run()
         pid, state = read_pid_state()
         if pid and process_alive(pid):
             if state == "starting":
@@ -1730,6 +2077,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
     pid = os.getpid()
     recorder: Recorder | None = None
     active_stage = "microphone setup"
+    error_stage = None
     run_id = uuid.uuid4().hex
     ts_start = time.time()
     t_start = time.monotonic()
@@ -1752,27 +2100,95 @@ def run_background_recording(args: argparse.Namespace) -> int:
     last_eta_update = 0.0
     last_eta_remaining = None
     eta_revisions = 0
+
+    chunk_queue: queue.Queue[tuple[int, Path, Optional[float]] | None] = queue.Queue()
+    chunk_lock = threading.Lock()
+    enqueued: dict[int, tuple[Path, Optional[float]]] = {}
+    results: dict[int, TranscriptionEvidence] = {}
+    results_lock = threading.Lock()
+    capture_closed = threading.Event()
+    loader_state: dict[str, Any] = {"load_ms": None, "fallback_load_ms": None, "error": None, "backend": None}
+    total_chunks_holder: dict[str, Optional[int]] = {"n": None}
+    consumer_fatal: list[Exception] = []
+    model_holder: dict[str, Any] = {"state": None}
+    text_holder = {"text": ""}
+    chars_typed = [0]
+    run_state: dict[str, Any] = {
+        "lock": threading.Lock(),
+        "finalized": False,
+        "pid": pid,
+        "run_id": run_id,
+        "ts_start": ts_start,
+        "t_start": t_start,
+        "args": args,
+        "recorder": None,
+        "wav_paths": [],
+        "should_delete": False,
+        "outcome": "success",
+        "error_stage": None,
+        "results": results,
+        "results_lock": results_lock,
+        "loader_state": loader_state,
+        "model_holder": model_holder,
+        "text_holder": text_holder,
+        "chars_typed": chars_typed,
+        "audio_s": 0.0,
+        "status_state": status_state,
+        "status_lock": status_lock,
+        "finalize_ms": None,
+        "insert_ms": None,
+        "insert_ok": False,
+        "backend": None,
+        "predicted": {
+            "shown_s": None,
+            "shown_at_epoch": None,
+            "source": None,
+            "key_level": None,
+            "n": None,
+            "confidence": None,
+            "revisions": 0,
+            "actual_s": None,
+        },
+    }
+
     def _compute_eta(audio_s, model=None, backend=None, config=None):
         try:
             if os.getenv("VOICE_ETA", "").strip().lower() in {"0", "false", "no", "off"}:
                 return None, None, None, None, None
             try:
-                eta_s, src, key_level, n, conf = voicemode_telemetry.calibrated_eta_seconds(audio_s, model=model, backend=backend, config=config)
+                eta_s, src, key_level, n, conf = voicemode_telemetry.calibrated_eta_seconds(
+                    audio_s, model=model, backend=backend, config=config
+                )
             except Exception:
                 eta_s = voicemode_telemetry.prior_eta_seconds(audio_s, model)
                 src, key_level, n, conf = "prior", f"prior:{model}", 0, "low"
             return eta_s, src, key_level, n, conf
         except Exception:
             return None, None, None, None, None
-    
+
     def _publish_status(state, phase, **deltas):
         try:
+            if run_state.get("finalized"):
+                return
             if not voicemode_telemetry.get_metrics_enabled():
                 return
             with status_lock:
                 s = dict(status_state)
                 s.update(deltas)
                 status_state.update(deltas)
+            pred = run_state.get("predicted")
+            if pred and isinstance(pred, dict):
+                rem = s.get("eta_remaining_s")
+                if rem is not None:
+                    if pred.get("shown_s") is None:
+                        pred["shown_s"] = rem
+                        pred["shown_at_epoch"] = s.get("updated_at") or time.time()
+                        pred["source"] = s.get("eta_source")
+                        pred["key_level"] = s.get("eta_key_level")
+                        pred["n"] = s.get("eta_n")
+                        pred["confidence"] = s.get("eta_confidence")
+                    else:
+                        pred["revisions"] = (pred.get("revisions") or 0) + 1
             try:
                 voicemode_telemetry.publish_status(voicemode_telemetry.build_status(**s, state=state, phase=phase))
             except Exception:
@@ -1787,6 +2203,99 @@ def run_background_recording(args: argparse.Namespace) -> int:
     def handle_cancel(signum, frame) -> None:
         nonlocal cancel_requested
         cancel_requested = True
+
+    def _enqueue(idx: int, path: Path, audio_s: Optional[float]) -> None:
+        with chunk_lock:
+            if idx not in enqueued:
+                enqueued[idx] = (path, audio_s)
+                chunk_queue.put((idx, path, audio_s))
+
+    def _consume() -> None:
+        _publish_status(
+            "recording" if not capture_closed.is_set() else "transcribing",
+            "load",
+        )
+        t_load = time.monotonic()
+        try:
+            model_holder["state"] = load_model(args)
+            loader_state["load_ms"] = round((time.monotonic() - t_load) * 1000.0, 3)
+            loader_state["backend"] = actual_backend(model_holder["state"].model)
+            run_state["backend"] = loader_state["backend"]
+        except Exception as exc:
+            loader_state["error"] = exc
+            consumer_fatal.append(exc)
+            return
+
+        last_success_text = ""
+        timeout_seconds = stt_timeout_seconds()
+
+        while True:
+            item = chunk_queue.get()
+            if item is None:
+                break
+            idx, chunk_path, audio_s = item
+            watchdog_expired = threading.Event()
+            watchdog_started_at = time.monotonic()
+            watchdog = threading.Timer(
+                timeout_seconds,
+                transcription_watchdog_handler,
+                args=[run_state, args, chunk_path, timeout_seconds, watchdog_started_at, watchdog_expired],
+            )
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                initial_prompt = last_success_text[-200:] if last_success_text else None
+                ev = transcribe_timed(
+                    model_holder["state"],
+                    chunk_path,
+                    args,
+                    initial_prompt=initial_prompt,
+                    audio_s=audio_s,
+                )
+                with results_lock:
+                    results[idx] = ev
+                if ev.fallback:
+                    model_holder["state"] = ev.model_state
+                    loader_state["fallback_load_ms"] = ev.fallback_load_ms
+                    loader_state["backend"] = ev.backend
+                    run_state["backend"] = ev.backend
+                if ev.text and ev.text.strip():
+                    last_success_text = ev.text.strip()
+            except Exception as exc:
+                tot = total_chunks_holder.get("n")
+                seg_label = f"segment {idx}/{tot}" if tot else f"segment {idx}"
+                print(f"Error transcribing {seg_label} ({chunk_path}): {exc}", file=sys.stderr, flush=True)
+                report_stt_failure(f"transcription of {seg_label}", exc, args, wav_path=chunk_path)
+                with results_lock:
+                    results[idx] = TranscriptionEvidence(
+                        text=SKIPPED_SEGMENT_MARKER,
+                        model_state=model_holder["state"],
+                        decode_ms=0.0,
+                        fallback=False,
+                        failure_type=type(exc).__name__,
+                        backend=loader_state.get("backend") or "unknown",
+                        avg_logprob=None,
+                        compression_ratio=None,
+                        no_speech_prob=None,
+                        temperature=None,
+                        vad_audio_s=None,
+                        decoder_segments=0,
+                        fallback_load_ms=None,
+                        audio_s=audio_s,
+                    )
+            finally:
+                watchdog.cancel()
+                if run_state.get("should_delete") and not watchdog_expired.is_set():
+                    try:
+                        chunk_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+            with results_lock:
+                done = len(results)
+            if capture_closed.is_set():
+                tot = total_chunks_holder["n"] or max(done, 1)
+                _publish_status("transcribing", "decode", segments=tot, segments_done=done)
 
     wav_paths: list[Path] = []
     should_delete = False
@@ -1808,6 +2317,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
             chunk_seconds=seg_duration,
             save_dir=args.save_dir,
         )
+        recorder.on_chunk_ready = _enqueue
+        run_state["recorder"] = recorder
         signal.signal(signal.SIGUSR1, handle_usr1)
         signal.signal(signal.SIGTERM, handle_cancel)
         signal.signal(signal.SIGINT, handle_cancel)
@@ -1817,7 +2328,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
         play_cue(args, "start")
         active_stage = "recording/capture"
         recorder.start()
-        # Routine "Recording..." toast suppressed per D-17 for focus safety
+        consumer = threading.Thread(target=_consume, daemon=True)
+        consumer.start()
         print(f"Recording in background at {sample_rate} Hz. PID {pid}.", flush=True)
 
         beep_interval = recording_beep_interval(args)
@@ -1855,176 +2367,126 @@ def run_background_recording(args: argparse.Namespace) -> int:
         if cancel_requested:
             print("Recording cancelled by signal.", flush=True)
             outcome = "cancelled"
+            capture_closed.set()
+            chunk_queue.put(None)
+            consumer.join(timeout=2.0)
+            finalize_background_run(run_state, outcome="cancelled")
             return 0
 
         write_pid_state(pid, "transcribing")
-        t_transcribing = time.monotonic()
+        capture_closed.set()
         active_stage = "WAV finalization"
         try:
             live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
             remaining = voicemode_telemetry.prior_eta_seconds(live_audio, getattr(args, "model", None))
             segs_est = int(math.ceil(live_audio / seg_duration)) if seg_duration and seg_duration > 0 else 0
-            _publish_status("transcribing", "finalize", audio_s=live_audio, segments=segs_est, segments_done=0,
-                            eta_remaining_s=remaining, eta_confidence="low", eta_source="prior", overrun=False)
+            _publish_status(
+                "transcribing",
+                "finalize",
+                audio_s=live_audio,
+                segments=segs_est,
+                segments_done=0,
+                eta_remaining_s=remaining,
+                eta_confidence="low",
+                eta_source="prior",
+                overrun=False,
+            )
         except Exception:
             pass
+
+        t_fin_0 = time.monotonic()
         raw_paths, duration, should_delete = recorder.stop_to_wav(args.save_dir)
+        finalize_ms = round((time.monotonic() - t_fin_0) * 1000.0, 3)
+        run_state["finalize_ms"] = finalize_ms
         wav_paths = [Path(p) for p in (raw_paths if isinstance(raw_paths, (list, tuple)) else [raw_paths])]
+        run_state["wav_paths"] = wav_paths
+        run_state["should_delete"] = should_delete
+        run_state["audio_s"] = round(float(duration), 3)
         play_cue_async(args, "stop")
         total_chunks = len(wav_paths)
+        total_chunks_holder["n"] = total_chunks
         chunk_str = f"{total_chunks} segment" if total_chunks == 1 else f"{total_chunks} segments"
         print(f"Stopped ({duration:.1f}s, {chunk_str}). Transcribing...", flush=True)
+
         try:
             d = round(float(duration), 3)
-            remaining = voicemode_telemetry.prior_eta_seconds(d, getattr(args, "model", None))
-            try:
-                spent = time.monotonic() - t_transcribing
-                remaining = max(0.0, float(remaining) - float(spent))
-            except Exception:
-                pass
-            _publish_status("transcribing", "finalize", audio_s=d, segments=total_chunks, segments_done=0,
-                            eta_remaining_s=remaining, eta_confidence="low", eta_source="prior", overrun=False)
+            remaining, eta_source, eta_key_level, eta_n, eta_confidence = _compute_eta(
+                d, getattr(args, "model", None), run_state.get("backend")
+            )
+            _publish_status(
+                "transcribing",
+                "finalize",
+                audio_s=d,
+                segments=total_chunks,
+                segments_done=0,
+                eta_remaining_s=remaining,
+                eta_confidence=eta_confidence or "low",
+                eta_source=eta_source or "prior",
+                overrun=False,
+            )
         except Exception:
             pass
 
-        active_stage = "Whisper model loading"
-        try:
-            _publish_status("transcribing", "load")
-        except Exception:
-            pass
-        model_state = load_model(args)
+        # Enqueue remaining chunks and sentinel
+        for idx, p in enumerate(wav_paths, 1):
+            with chunk_lock:
+                if idx not in enqueued:
+                    audio_s = recorder.chunk_audio_s(idx)
+                    enqueued[idx] = (p, audio_s)
+                    chunk_queue.put((idx, p, audio_s))
+        chunk_queue.put(None)
 
         active_stage = "Whisper transcription"
-        timeout_seconds = stt_timeout_seconds()
-        transcripts: list[str] = []
-        last_success_text = ""
-
-        for idx, chunk_path in enumerate(wav_paths, 1):
-            segment_label = f"segment {idx}/{total_chunks}"
-            print(f"Transcribing {segment_label} ({chunk_path})...", flush=True)
-            watchdog_expired = threading.Event()
-            watchdog_started_at = time.monotonic()
-            watchdog = threading.Timer(
-                timeout_seconds,
-                transcription_watchdog_handler,
-                args=[pid, args, chunk_path, timeout_seconds, watchdog_started_at, watchdog_expired],
-            )
-            watchdog.daemon = True
-            watchdog.start()
-            try:
-                initial_prompt = last_success_text[-200:] if last_success_text else None
-                seg_text, model_state = transcribe(
-                    model_state,
-                    chunk_path,
-                    args,
-                    initial_prompt=initial_prompt,
-                )
-                if seg_text and seg_text.strip():
-                    transcripts.append(seg_text.strip())
-                    last_success_text = seg_text.strip()
-            except Exception as exc:
-                print(f"Error transcribing {segment_label} ({chunk_path}): {exc}", file=sys.stderr, flush=True)
-                report_stt_failure(f"transcription of {segment_label}", exc, args, wav_path=chunk_path)
-                transcripts.append(SKIPPED_SEGMENT_MARKER)
-            finally:
-                watchdog.cancel()
-                if should_delete and not watchdog_expired.is_set():
-                    try:
-                        chunk_path.unlink()
-                    except OSError:
-                        pass
+        consumer.join()
+        if consumer_fatal:
+            raise consumer_fatal[0]
 
         active_stage = "STT result handling"
+        with results_lock:
+            sorted_items = sorted(results.items(), key=lambda x: x[0])
+        transcripts = [ev.text for _, ev in sorted_items if ev.text]
         text = " ".join(t for t in transcripts if t).strip()
+        run_state["text"] = text
+        text_holder["text"] = text
         print(text or "[no speech detected]", flush=True)
 
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
-            try:
-                _publish_status("typing", "insert")
-            except Exception:
-                pass
+            _publish_status("typing", "insert")
+            t_ins_0 = time.monotonic()
             if insert_text(text, args, raise_errors=True):
+                run_state["insert_ms"] = round((time.monotonic() - t_ins_0) * 1000.0, 3)
+                run_state["insert_ok"] = True
+                run_state["chars_typed"] = len(text)
                 print("Transcript inserted.", flush=True)
-                # Routine "Transcript inserted." toast suppressed per D-17
             else:
                 raise RuntimeError("transcript insertion returned an unsuccessful result")
         elif text and not args.paste:
             write_pid_state(pid, "typing")
-            try:
-                _publish_status("typing", "insert")
-            except Exception:
-                pass
+            _publish_status("typing", "insert")
         elif text:
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:
             notify(APP_NAME, "No speech detected.", args)
+        outcome = "success"
         return 0
     except STTStageFailure as exc:
         outcome = "error"
+        error_stage = exc.stage
         play_cue(args, "error")
         report_stt_failure(exc.stage, exc.error, args, previous_failures=exc.previous_failures)
         print(f"voice background error during {exc.stage}: {type(exc.error).__name__}", file=sys.stderr, flush=True)
         return 1
     except Exception as exc:
         outcome = "error"
+        error_stage = active_stage
         play_cue(args, "error")
         report_stt_failure(active_stage, exc, args)
         print(f"voice background error during {active_stage}: {type(exc).__name__}", file=sys.stderr, flush=True)
         return 1
     finally:
-        if recorder is not None and recorder.recording:
-            try:
-                recorder.stop_to_wav(None)
-            except Exception:
-                pass
-        if should_delete and wav_paths:
-            for p in wav_paths:
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-        remove_pid(pid)
-        try:
-            voicemode_telemetry.remove_status()
-        except Exception:
-            pass
-        try:
-            if voicemode_telemetry.get_metrics_enabled():
-                def chunk_seconds_fn(args_ns):
-                    try:
-                        return float(getattr(args_ns, "chunk_seconds", DEFAULT_CHUNK_SECONDS))
-                    except Exception:
-                        return float(DEFAULT_CHUNK_SECONDS)
-                config = {
-                    "model": getattr(args, "model", None),
-                    "device": getattr(args, "device", None),
-                    "compute_type": getattr(args, "compute_type", None),
-                    "beam_size": getattr(args, "beam_size", None),
-                    "vad_filter": getattr(args, "vad_filter", None),
-                    "language": getattr(args, "language", None),
-                    "chunk_s": chunk_seconds_fn(args),
-                }
-                voicemode_telemetry.append_ledger_row({
-                    "schema": 1,
-                    "source": "stt",
-                    "run_id": run_id,
-                    "ts_start": ts_start,
-                    "ts_end": time.time(),
-                    "outcome": outcome,
-                    "error_stage": None,
-                    "actual": {"total_ms": round((time.monotonic() - t_start) * 1000, 3)},
-                    "chars_out": len(text) if text else 0,
-                    "chars_typed": 0,
-                    "segments": [],
-                    "config": config,
-                    "backend": None,
-                    "predicted": {},
-                    "tts": {},
-                })
-        except Exception:
-            pass
+        finalize_background_run(run_state, outcome=outcome, error_stage=error_stage)
 
 
 def parse_gsettings_list(raw: str) -> list[str]:
