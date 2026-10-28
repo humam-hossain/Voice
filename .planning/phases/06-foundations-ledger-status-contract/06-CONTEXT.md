@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-This phase makes telemetry and status truthful: freeze schema v1, add `voicemode_telemetry.py`, write the JSONL ledger and atomic `status.json`, fix the duplicate-worker race and lifecycle races, instrument honest stage timings (including the faster-whisper lazy generator seam), make non-transcription commands import-light, and reserve TTS fields. No new PID state strings, no new dependencies, no transcript text stored.
+This phase makes telemetry and status truthful: freeze schema v1, add `voicemode_telemetry.py`, write the JSONL ledger and atomic `status.json`, fix the duplicate-worker race and lifecycle races, instrument honest stage timings (including the faster-whisper lazy generator seam), load the model early and transcribe completed chunks incrementally while recording (keeping the model hot), make non-transcription commands import-light, and reserve TTS fields. No new PID state strings, no new dependencies, no transcript text stored. UX remains unchanged (buffer to clipboard/file, paste on stop).
 </domain>
 
 <decisions>
@@ -24,8 +24,14 @@ This phase makes telemetry and status truthful: freeze schema v1, add `voicemode
 ### Config names
 - **D-04:** Primary env var is `VOICE_METRICS`. Alias `VOICE_TELEMETRY` to it for backward compatibility. Outlier corpus capture flag: `VOICE_CAPTURE_OUTLIERS` (default off). Document all three in `docs/telemetry.md`. — **Reversibility:** reversible — aliases avoid breaking existing usage.
 
+### Transcription strategy
+- **D-05:** Load the Whisper model early in the background worker (before/during recording start), not after recording stops. This pays the cold-load cost while the user is preparing to speak and removes the post-stop load cliff.
+- **D-06:** Transcribe completed audio chunks incrementally as they are written to disk while recording continues. Keep the model hot across chunks. All transcripts are buffered and only pasted/inserted at the end per existing UX (no live typing to the focused window).
+- **D-07:** Track per-chunk timings (audio duration, decode time covering full generator consumption, chars count) and record them in telemetry. This lets prediction handle silence/padding correctly without guessing future silence, and feeds better calibration in later phases.
+- **D-08:** Keep prediction infrastructure. Even with incremental transcription, ETA remains useful (fallbacks, final chunk variance, etc.). The goal is to make it more honest, not remove it.
+
 ### the agent's Discretion
-- Exact rotation implementation details (if we ever hit the safety cap), ledger file permissions (`0700`/`0600`), `status.json` atomic write details, and test placement/mocking strategy.
+- Exact rotation implementation details (if we ever hit the safety cap), ledger file permissions (`0700`/`0600`), `status.json` atomic write details, test placement/mocking strategy, and how to parallelize chunk transcription vs recording (sequential is fine as long as model stays loaded).
 </decisions>
 
 <canonical_refs>
