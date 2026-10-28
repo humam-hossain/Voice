@@ -40,6 +40,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 **Depends on**: Nothing (first phase of v1.1; builds on the shipped v1.0 lifecycle)
 **Requirements**: FND-01, FND-02, FND-03, FND-04, FND-05, LED-01, LED-02, LED-03, LED-04, LED-05, LED-06, LED-07, DEC-01, DEC-02, DEC-03, DEC-04, STS-01, STS-02, STS-03, STS-04, STS-05
 **Success Criteria** (what must be TRUE):
+
   1. Non-transcription commands (`--status`, `--report`, `--toggle`, `--cancel`, `--doctor`) work without loading numpy, sounddevice, or faster-whisper, and `voice --status` completes in under 100 ms warm.
   2. Two rapid toggle presses during cold start leave exactly one worker running and the PID state file is never observed torn, and every abnormal exit ends in a terminal outcome instead of a stale "transcribing" state; only the existing PID state vocabulary is published.
   3. After every run — success, cancel, error, watchdog timeout, or GPU→CPU fallback — exactly one schema-v1 ledger row exists with predicted and actual timings, stage timings whose decode spans full generator consumption, per-segment decoder evidence, config/backend/host fingerprint, outcome, prediction metadata, and reserved TTS fields with no TTS data written, while `status.json` is removed.
@@ -48,22 +49,28 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 
 **Plans:** 7/7 plans complete
 Plans:
+
 - [x] 06-07-PLAN.md
 
 **Wave 1**
+
 - [x] 06-01-PLAN.md — Tracer: one run → one ledger row + status publish/remove end-to-end, telemetry seam, import-light CLI
 
 **Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 06-02-PLAN.md — Freeze ledger schema v1: allowlisted builder, privacy tests, TTS-reserved fields, rotation, docs
 - [x] 06-03-PLAN.md — Close duplicate-worker race and torn PID reads: flock around toggle, atomic PID writes, ownership gate
 
 **Wave 3** *(blocked on Wave 2 completion)*
+
 - [x] 06-04-PLAN.md — Publish status contract v1: atomic status.json at every transition, 5 s heartbeat, prior ETA, expiry
 
 **Wave 4** *(blocked on Wave 3 completion)*
+
 - [x] 06-05-PLAN.md — Honest timing: timed transcription seam, per-chunk evidence, early model load, incremental decoding
 
 **Wave 5** *(blocked on Wave 4 completion)*
+
 - [x] 06-06-PLAN.md — Every exit truthful: shared finalize authority, watchdog row, abandoned-run reconciliation
 
 ### Phase 7: ETA Engine & Calibration
@@ -72,22 +79,26 @@ Plans:
 **Depends on**: Phase 6
 **Requirements**: ETA-01, ETA-02, ETA-03, ETA-04, ETA-05, ETA-06, ETA-07, ETA-08, ETA-09
 **Success Criteria** (what must be TRUE):
+
   1. A single integer ETA appears within 100 ms of entering transcribing on a fresh install — before model load — using shipped priors and prefixed with `~` when uncalibrated.
   2. The ETA counts down at a steady integer cadence, is monotone non-increasing except for marked upward revisions at most once per 2 s, stays hidden while starting/recording, and never shows a negative, zero, fractional, or ranged value.
   3. On overrun the display clamps at 1 s and then reads `Finishing…`; the overrun is recorded in the ledger rather than hidden.
   4. After 20 runs on this machine, the ETA's median absolute error against "text begins inserting" is at or below 20%, while failed, fallback, cold, contended, and outlier runs are excluded from fitting but kept in the ledger.
   5. `--status --json` exposes state, phase, ETA, source, and confidence; `--reset-calibration` returns the estimator to prior-based numbers; `VOICE_ETA=off` hides the ETA without affecting transcription.
 
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 07-01-PLAN.md — Estimator Core (Formula, Priors, Keying)
+
+- [x] 07-01-PLAN.md — Estimator Core (Formula, Priors, Keying)
 
 **Wave 2** *(blocked on Wave 1)*
+
 - [ ] 07-02-PLAN.md — Mid-Run Correction & Display Rules
 
 **Wave 3** *(blocked on Wave 1,2)*
+
 - [ ] 07-03-PLAN.md — Calibration, CLI Flags, Status Exposure
 
 ### Phase 8: Accuracy Report & Click-Through
@@ -96,6 +107,7 @@ Plans:
 **Depends on**: Phase 7
 **Requirements**: RPT-01, RPT-02, RPT-03, RPT-04, RPT-05, RPT-06
 **Success Criteria** (what must be TRUE):
+
   1. `voice --report` produces a terminal summary plus CSV and HTML output, with since/last/path/open filters, and never imports Whisper.
   2. The HTML report shows predicted vs actual, error over time, stage breakdown, and a residual histogram using inline SVG, with no JavaScript, no external assets, and no network requests.
   3. A fresh install shows an explicit empty state, and every report carries a privacy footer naming the schema, what is stored, where it lives, how to delete it, and the clipboard caveat.
@@ -110,6 +122,7 @@ Plans:
 **Depends on**: Phase 8
 **Requirements**: UI-01, UI-02, UI-03, UI-04, UI-05
 **Success Criteria** (what must be TRUE):
+
   1. During transcription the pill shows a single-number ETA in place of `"Transcribing..."`, visually distinct from recording by both palette role and glyph, and legible in light, dark, and grayscale.
   2. The number counts down at 1 Hz from the worker-provided epoch without spawning a process, without synchronous 10 Hz reads, and without shifting the bar's layout on each tick.
   3. Unknown, malformed, or stale status renders a busy state — never idle and never a frozen number — while recording still shows no ETA.
@@ -125,6 +138,7 @@ Plans:
 **Depends on**: Phase 9
 **Requirements**: ACC-01, ACC-02, ACC-03, ACC-04, ACC-05, ACC-06, ACC-07
 **Success Criteria** (what must be TRUE):
+
   1. The report shows convergence/drift and a per-config calibration table, and `--doctor` reports sample count, median absolute error, p90, last calibration, ledger/status health, and resolved paths.
   2. Outliers are always detected and visible in the report; corpus capture is off by default and, when explicitly enabled, stores only bounded, permission-restricted audio outside the timed path with free-space checks and no network.
   3. CPU int8 is verified; CUDA is detected and recorded but never enabled; AMD and Intel GPUs stay on CPU; calibration keys use the resolved backend; hardware probes never hang or pollute the ledger.
@@ -146,7 +160,7 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 4. Hyprland Integration & Daemon Lifecycle | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 5. End-to-End System Verification | v1.0 | 2/2 | Complete | 2026-09-19 |
 | 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
-| 7. ETA Engine & Calibration | v1.1 | 0/3 | Not started | - |
+| 7. ETA Engine & Calibration | v1.1 | 1/3 | In Progress|  |
 | 8. Accuracy Report & Click-Through | v1.1 | 0/0 | Not started | - |
 | 9. Quickshell ETA Integration | v1.1 | 0/0 | Not started | - |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |

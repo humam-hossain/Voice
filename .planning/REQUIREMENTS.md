@@ -47,14 +47,14 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Predictor & ETA (ETA)
 
-- [ ] **ETA-01**: Estimate = finalize + load + rate × Σ(audio after VAD) + insert; rate is the ratio of sums, not the mean of ratios.
-- [ ] **ETA-02**: Key hierarchy with a minimum of 3 samples per level, falling back to a shipped prior; the chosen level and n are recorded.
+- [x] **ETA-01**: Estimate = finalize + load + rate × Σ(audio after VAD) + insert; rate is the ratio of sums, not the mean of ratios.
+- [x] **ETA-02**: Key hierarchy with a minimum of 3 samples per level, falling back to a shipped prior; the chosen level and n are recorded.
 - [ ] **ETA-03**: Robust calibration (median/shrinkage, MAD-based confidence) excludes failures, fallbacks, outliers, cold runs, and high-load runs from fitting only — the records themselves are kept.
 - [ ] **ETA-04**: Mid-run correction after each segment; the display is monotone non-increasing except for marked upward revisions at most once per 2 s.
 - [ ] **ETA-05**: Overrun behavior: 1 s floor → `Finishing…` → indeterminate; never negative, zero, fractional, or a range; overrun is recorded.
 - [ ] **ETA-06**: ETA is shown only during transcribing/finalizing and hidden while starting/recording.
 - [ ] **ETA-07**: A single number; uncalibrated estimates are prefixed `~`; no ranges.
-- [ ] **ETA-08**: The ETA endpoint is "text begins inserting"; typing time is measured separately.
+- [x] **ETA-08**: The ETA endpoint is "text begins inserting"; typing time is measured separately.
 - [ ] **ETA-09**: `--status --json` exposes state/phase/ETA/source/confidence; `--reset-calibration`; `VOICE_ETA=off`.
 
 ### Reporting (RPT)
@@ -158,14 +158,14 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | STS-03 | 6 | Complete |
 | STS-04 | 6 | Complete |
 | STS-05 | 6 | Complete |
-| ETA-01 | 7 | Pending |
-| ETA-02 | 7 | Pending |
+| ETA-01 | 7 | Complete |
+| ETA-02 | 7 | Complete |
 | ETA-03 | 7 | Pending |
 | ETA-04 | 7 | Pending |
 | ETA-05 | 7 | Pending |
 | ETA-06 | 7 | Pending |
 | ETA-07 | 7 | Pending |
-| ETA-08 | 7 | Pending |
+| ETA-08 | 7 | Complete |
 | ETA-09 | 7 | Pending |
 | RPT-01 | 8 | Pending |
 | RPT-02 | 8 | Pending |
@@ -187,6 +187,7 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | ACC-07 | 10 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 48 total
 - Mapped to phases: 48
 - Unmapped: 0
