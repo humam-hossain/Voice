@@ -92,3 +92,121 @@ class TestETAEngine(TempXdgTestCase):
         self.assertEqual(source, "calibrated")
         self.assertEqual(n, 10)
         self.assertAlmostEqual(eta, 5.6, places=2)
+
+
+class TestKeyHierarchy(TempXdgTestCase):
+    def test_extract_hierarchy_keys_structure(self) -> None:
+        """ETA-02: Verify extract_hierarchy_keys formats L0 (8 fields), L1 (6 fields), L2 (4 fields), L3 (prior)."""
+        config = {
+            "model": "medium.en",
+            "device": "cuda",
+            "compute_type": "float16",
+            "beam_size": 2,
+            "vad_filter": False,
+            "language": "en",
+            "chunk_s": 90.0,
+        }
+        backend = "cuda, float16"
+
+        keys = voicemode_telemetry.extract_hierarchy_keys(config, backend)
+        self.assertIn("L0", keys)
+        self.assertIn("L1", keys)
+        self.assertIn("L2", keys)
+        self.assertIn("L3", keys)
+
+        # L0: 8 fields
+        self.assertEqual(
+            keys["L0"],
+            "medium.en|cuda|float16|cuda, float16|beam=2|vad=0|lang=en|chunk=90.0",
+        )
+        # L1: 6 fields (drops chunk_s and vad_filter)
+        self.assertEqual(
+            keys["L1"],
+            "medium.en|cuda|float16|cuda, float16|beam=2|lang=en",
+        )
+        # L2: 4 fields (model, device, compute_type, backend)
+        self.assertEqual(
+            keys["L2"],
+            "medium.en|cuda|float16|cuda, float16",
+        )
+        # L3: prior:prefix
+        self.assertEqual(keys["L3"], "prior:medium")
+
+    def test_hierarchy_fallback_under_sample_floor(self) -> None:
+        """ETA-02: Minimum sample floor n=3. Below 3, fall to broader tiers."""
+        keys = {
+            "L0": "m|cpu|int8|b|beam=1|vad=1|lang=en|chunk=180.0",
+            "L1": "m|cpu|int8|b|beam=1|lang=en",
+            "L2": "m|cpu|int8|b",
+            "L3": "prior:m",
+        }
+        prior_rtf = 0.95
+
+        # Case 1: All empty -> L3 prior
+        rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, {}, prior_rtf)
+        self.assertEqual(level, "L3")
+        self.assertEqual(n, 0)
+        self.assertEqual(rate, prior_rtf)
+
+        # Case 2: L0 has n=1 (<3), L1 has n=2 (<3), L2 has n=4 (>=3) -> falls to L2
+        accs = {
+            "L0": {keys["L0"]: {"n": 1, "sum_decode_s": 0.4, "sum_audio_s": 1.0}},
+            "L1": {keys["L1"]: {"n": 2, "sum_decode_s": 1.0, "sum_audio_s": 2.0}},
+            "L2": {keys["L2"]: {"n": 4, "sum_decode_s": 2.4, "sum_audio_s": 4.0}},
+        }
+        rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, accs, prior_rtf)
+        self.assertEqual(level, "L2")
+        self.assertEqual(n, 4)
+
+    def test_james_stein_shrinkage_blending(self) -> None:
+        """ETA-02: James-Stein shrinkage weight = min(1.0, n/10.0)."""
+        keys = {
+            "L0": "m|cpu|int8|b|beam=1|vad=1|lang=en|chunk=180.0",
+            "L1": "m|cpu|int8|b|beam=1|lang=en",
+            "L2": "m|cpu|int8|b",
+            "L3": "prior:m",
+        }
+        prior_rtf = 1.0
+
+        # L1 has n=10 (fully calibrated parent rate = 0.6)
+        # L0 has n=5 -> weight = 5 / 10 = 0.5
+        # L0 raw rate = 0.4 / 1.0 = 0.4
+        # Blended rate at L0 should be: 0.5 * 0.4 + 0.5 * 0.6 = 0.5
+        accs_5 = {
+            "L1": {keys["L1"]: {"n": 10, "sum_decode_s": 6.0, "sum_audio_s": 10.0}},
+            "L0": {keys["L0"]: {"n": 5, "sum_decode_s": 2.0, "sum_audio_s": 5.0}},
+        }
+        rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, accs_5, prior_rtf)
+        self.assertEqual(level, "L0")
+        self.assertEqual(n, 5)
+        self.assertAlmostEqual(rate, 0.5, places=4)
+
+        # L0 has n=10 -> weight = 1.0 -> fully trusts L0 rate (0.4)
+        accs_10 = {
+            "L1": {keys["L1"]: {"n": 10, "sum_decode_s": 6.0, "sum_audio_s": 10.0}},
+            "L0": {keys["L0"]: {"n": 10, "sum_decode_s": 4.0, "sum_audio_s": 10.0}},
+        }
+        rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, accs_10, prior_rtf)
+        self.assertEqual(level, "L0")
+        self.assertEqual(n, 10)
+        self.assertAlmostEqual(rate, 0.4, places=4)
+
+    def test_out_of_bounds_rate_rejection(self) -> None:
+        """T-07-02: Rates outside [0.01, 10.0] are rejected and fall back to broader tier."""
+        keys = {
+            "L0": "m|cpu|int8|b|beam=1|vad=1|lang=en|chunk=180.0",
+            "L1": "m|cpu|int8|b|beam=1|lang=en",
+            "L2": "m|cpu|int8|b",
+            "L3": "prior:m",
+        }
+        prior_rtf = 0.8
+
+        # L0 raw rate = 25.0 / 1.0 = 25.0 (>10.0 outlier)
+        # L1 raw rate = 0.5 / 1.0 = 0.5 (valid)
+        accs = {
+            "L0": {keys["L0"]: {"n": 10, "sum_decode_s": 25.0, "sum_audio_s": 1.0}},
+            "L1": {keys["L1"]: {"n": 10, "sum_decode_s": 5.0, "sum_audio_s": 10.0}},
+        }
+        rate, level, n = voicemode_telemetry.resolve_calibrated_rate(keys, accs, prior_rtf)
+        self.assertEqual(level, "L1")
+        self.assertAlmostEqual(rate, 0.5, places=4)
