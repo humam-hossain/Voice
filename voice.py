@@ -18,6 +18,7 @@ os.environ.setdefault("PIPEWIRE_PROPS", '{ application.name = voicemode }')
 import argparse
 import ast
 import asyncio
+import json
 import math
 import re
 import select
@@ -1296,6 +1297,12 @@ def finalize_background_run(
                 )
                 voicemode_telemetry.append_ledger_row(record)
                 row_written = True
+
+                # Post-paste calibration cache update (strictly after ledger write)
+                try:
+                    voicemode_telemetry.update_calibration_from_run(record)
+                except Exception:
+                    pass
         except Exception as ledger_exc:
             print(f"Error appending ledger row: {ledger_exc}", file=sys.stderr, flush=True)
 
@@ -2165,6 +2172,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
     t_start = time.monotonic()
     text = ""
     outcome = "success"
+
+    # Cold boot detection via tmpfs marker
+    try:
+        is_cold_boot = voicemode_telemetry.check_and_mark_boot_session()
+    except Exception:
+        is_cold_boot = False
+
     status_lock = threading.Lock()
     status_state = {
         "pid": pid,
@@ -2596,6 +2610,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 backend=run_state.get("backend"),
                 config=cfg_dict,
                 elapsed_record_s=live_audio,
+                is_cold=is_cold_boot,
             )
             segs_est = int(math.ceil(live_audio / seg_duration)) if seg_duration and seg_duration > 0 else 0
             _publish_status(
@@ -2637,6 +2652,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 backend=run_state.get("backend"),
                 config=cfg_dict,
                 elapsed_record_s=d,
+                is_cold=is_cold_boot,
             )
             _publish_status(
                 "transcribing",
@@ -2841,7 +2857,17 @@ def install_hotkeys_dispatch() -> int:
 
 def print_status(args: argparse.Namespace = None) -> int:
     try:
-        if args is not None and getattr(args, "json_status", False) or (args is not None and getattr(args, "json", False) and getattr(args, "status", False)):
+        is_json = (
+            args is not None
+            and (
+                getattr(args, "json_status", False)
+                or (
+                    (getattr(args, "json", False) or getattr(args, "json_verify", False))
+                    and getattr(args, "status", False)
+                )
+            )
+        )
+        if is_json:
             try:
                 import voicemode_telemetry
                 st = voicemode_telemetry.read_status()
@@ -2861,8 +2887,15 @@ def print_status(args: argparse.Namespace = None) -> int:
                             "segments_done": st.get("segments_done"),
                             "pid": st.get("pid") or pid,
                             "run_id": st.get("run_id"),
-                            "overrun": st.get("overrun"),
+                            "overrun": bool(st.get("overrun")),
+                            "revision_count": st.get("revision_count", 0),
+                            "last_revised_at": st.get("last_revised_at"),
+                            "key_level": st.get("key_level"),
+                            "key_n": st.get("key_n"),
                         }
+                        if os.getenv("VOICE_ETA", "").strip().lower() in ("0", "false", "no", "off"):
+                            for k in ("eta_remaining_s", "eta_epoch", "eta_source", "eta_confidence", "key_level", "key_n"):
+                                out[k] = None
                         print(json.dumps(out))
                         return 0
                     # fallback
@@ -3999,9 +4032,9 @@ def main() -> int:
         try:
             import voicemode_telemetry
             voicemode_telemetry.reset_calibration()
-            print("calibration reset")
+            print("Calibration reset to priors.")
         except Exception:
-            print("calibration reset")
+            print("Calibration reset to priors.")
         return 0
     if getattr(args, "metrics", False):
         try:

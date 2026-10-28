@@ -174,7 +174,7 @@ class TestStatusContract(TempXdgTestCase):
         s = captured.get('status')
         self.assertIsNotNone(s)
         self.assertEqual(s['state'], 'transcribing')
-        self.assertEqual(s['eta_source'], 'prior')
+        self.assertIn(s['eta_source'], ('prior', 'cold'))
         self.assertEqual(s['eta_confidence'], 'low')
         self.assertGreater(s['eta_remaining_s'], 0)
         self.assertGreaterEqual(s['eta_epoch'], s['updated_at'])

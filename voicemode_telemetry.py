@@ -786,7 +786,12 @@ def check_and_mark_boot_session(state_dir: Optional[Path] = None) -> bool:
     if marker.exists():
         return False
     try:
+        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         marker.touch(mode=0o600)
+        try:
+            marker.chmod(0o600)
+        except OSError:
+            pass
     except OSError:
         pass
     return True
@@ -810,17 +815,21 @@ def compute_mad_confidence(residuals: list[float]) -> float:
 
 def _is_calibration_excluded(record: dict) -> bool:
     try:
+        if not isinstance(record, dict):
+            return True
         if record.get("outcome") != "success":
             return True
         if record.get("fallback_used"):
             return True
+        pred = record.get("predicted") or {}
+        if isinstance(pred, dict) and pred.get("source") == "cold":
+            return True
         actual = record.get("actual") or {}
+        if not isinstance(actual, dict):
+            return True
         load_ms = actual.get("load_ms")
         # Contention proxy: load_ms > 3x calibrated/prior load (1.2s prior * 3 = 3600ms)
         if load_ms is not None and float(load_ms) > 3600.0:
-            return True
-        pred = record.get("predicted") or {}
-        if pred.get("source") == "cold":
             return True
         audio_s = float(record.get("audio_s") or 0.0)
         decode_ms = actual.get("decode_ms")
@@ -830,9 +839,9 @@ def _is_calibration_excluded(record: dict) -> bool:
         rate = decode_s / audio_s
         if rate < 0.01 or rate > 10.0:
             return True
+        return False
     except Exception:
-        pass
-    return False
+        return True
 
 
 def _get_acc(accumulators: dict, tier: str, key: Optional[str]) -> dict:
@@ -915,13 +924,8 @@ def resolve_calibrated_rate(keys: dict[str, str], accumulators: dict, prior_rtf:
         return prior_rtf, "L3", 0
 
 
-def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -> bool:
+def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -> dict:
     """Updates calibration cache accumulators from a completed run record."""
-    if not isinstance(record, dict):
-        return False
-    if _is_calibration_excluded(record):
-        return False
-
     save_needed = False
     if cal_data is None:
         cal = load_calibration()
@@ -929,6 +933,8 @@ def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -
     else:
         cal = cal_data
 
+    if not isinstance(cal, dict):
+        cal = {}
     cal.setdefault("accumulators", {"L0": {}, "L1": {}, "L2": {}})
     accs = cal["accumulators"]
     if not isinstance(accs, dict):
@@ -936,50 +942,31 @@ def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -
         cal["accumulators"] = accs
     for tier in ("L0", "L1", "L2"):
         accs.setdefault(tier, {})
+    cal.setdefault("residuals", [])
+
+    if not isinstance(record, dict):
+        return cal
 
     actual = record.get("actual") or {}
-    decode_ms = actual.get("decode_ms")
-    audio_s = record.get("audio_s")
-    if decode_ms is None or audio_s is None:
-        return False
-    try:
-        audio_s = float(audio_s)
-        decode_s = float(decode_ms) / 1000.0
-        if audio_s <= 0 or decode_s <= 0:
-            return False
-    except Exception:
-        return False
-
-    config = record.get("config") or {}
-    backend = record.get("backend") or "cpu, int8"
-    keys = extract_hierarchy_keys(config, backend)
-
-    load_ms = actual.get("load_ms")
-    load_s = float(load_ms) / 1000.0 if load_ms is not None else PRIOR_LOAD_S
-
-    for tier in ("L0", "L1", "L2"):
-        tier_key = keys.get(tier)
-        if not tier_key:
-            continue
-        tier_dict = accs[tier]
-        entry = tier_dict.setdefault(tier_key, {
-            "sum_decode_s": 0.0,
-            "sum_audio_s": 0.0,
-            "n": 0,
-            "load_s": PRIOR_LOAD_S
-        })
-        entry["sum_decode_s"] += decode_s
-        entry["sum_audio_s"] += audio_s
-        entry["n"] += 1
-        entry["load_s"] = round((entry.get("load_s", PRIOR_LOAD_S) * (entry["n"] - 1) + load_s) / entry["n"], 4)
-
-    # Residuals tracking
     predicted = record.get("predicted") or {}
-    actual_total_ms = actual.get("total_ms")
-    shown_s = predicted.get("shown_s")
-    if actual_total_ms is not None and shown_s is not None:
+
+    # Residuals tracking: if record has predicted and actual total_s
+    actual_total_s = None
+    if predicted.get("actual_s") is not None:
         try:
-            res = abs(float(shown_s) - (float(actual_total_ms) / 1000.0))
+            actual_total_s = float(predicted["actual_s"])
+        except Exception:
+            pass
+    elif actual.get("total_ms") is not None:
+        try:
+            actual_total_s = float(actual["total_ms"]) / 1000.0
+        except Exception:
+            pass
+
+    shown_s = predicted.get("shown_s")
+    if actual_total_s is not None and shown_s is not None and record.get("outcome") == "success":
+        try:
+            res = abs(float(shown_s) - actual_total_s)
             residuals = cal.setdefault("residuals", [])
             residuals.append(round(res, 4))
             if len(residuals) > 30:
@@ -988,11 +975,45 @@ def update_calibration_from_run(record: dict, cal_data: Optional[dict] = None) -
         except Exception:
             pass
 
+    # Accumulator fitting: only for non-excluded successful runs
+    if not _is_calibration_excluded(record):
+        decode_ms = actual.get("decode_ms")
+        audio_s = record.get("audio_s")
+        if decode_ms is not None and audio_s is not None:
+            try:
+                audio_s_f = float(audio_s)
+                decode_s_f = float(decode_ms) / 1000.0
+                if audio_s_f > 0 and decode_s_f > 0:
+                    config = record.get("config") or {}
+                    backend = record.get("backend") or "cpu, int8"
+                    keys = extract_hierarchy_keys(config, backend)
+
+                    load_ms = actual.get("load_ms")
+                    load_s = float(load_ms) / 1000.0 if load_ms is not None else PRIOR_LOAD_S
+
+                    for tier in ("L0", "L1", "L2"):
+                        tier_key = keys.get(tier)
+                        if not tier_key:
+                            continue
+                        tier_dict = accs[tier]
+                        entry = tier_dict.setdefault(tier_key, {
+                            "sum_decode_s": 0.0,
+                            "sum_audio_s": 0.0,
+                            "n": 0,
+                            "load_s": PRIOR_LOAD_S
+                        })
+                        entry["sum_decode_s"] += decode_s_f
+                        entry["sum_audio_s"] += audio_s_f
+                        entry["n"] += 1
+                        entry["load_s"] = round((entry.get("load_s", PRIOR_LOAD_S) * (entry["n"] - 1) + load_s) / entry["n"], 4)
+            except Exception:
+                pass
+
     cal["updated_at"] = time.time()
 
     if save_needed:
         save_calibration(cal)
-    return True
+    return cal
 
 
 def rebuild_calibration_from_ledger() -> dict:
@@ -1023,9 +1044,9 @@ def fit_calibration_from_ledger(max_runs: int = 1000):
 
 def calibrated_eta_seconds(audio_s, model=None, backend=None, config=None, calibration_key_val=None, elapsed_record_s=0.0, is_cold=False):
     """Compute ETA with calibration. Returns (eta_seconds, source, key_level, n, confidence)."""
-    voice_eta_env = os.getenv("VOICE_ETA")
-    if voice_eta_env is not None and voice_eta_env.strip().lower() in {"0", "false", "no", "off", ""}:
-        return None, None, None, None, None
+    voice_eta_env = os.getenv("VOICE_ETA", "").strip().lower()
+    if voice_eta_env in {"0", "false", "no", "off"}:
+        return None, None, None, 0, None
 
     cfg = dict(config) if config else {}
     if model is not None and not cfg.get("model"):
