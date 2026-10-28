@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phase 7: ETA Engine &amp; Calibration — Architecture</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; color: var(--accent); }
+  h2 { font-size: 1.35rem; margin: 2.5rem 0 0.75rem; color: var(--green); border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--purple); }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .diagram-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0 2rem; overflow-x: auto; }
+  .diagram-card .mermaid { display: flex; justify-content: center; }
+  .diagram-card .mermaid svg { max-width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+  .decision-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  .decision-table th { text-align: left; padding: 0.6rem 0.8rem; background: var(--surface); border: 1px solid var(--border); color: var(--accent); font-weight: 600; }
+  .decision-table td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); vertical-align: top; }
+  .decision-table tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+  code { background: var(--surface); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; color: var(--orange); }
+  .file-badge { display: inline-block; background: #1f2937; border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.5rem; font-size: 0.8rem; color: var(--accent); font-family: monospace; }
+  .note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0; font-size: 0.9rem; }
+  .warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); }
+  .section-nav { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; z-index: 10; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .section-nav a { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 0.3rem 0.6rem; border-radius: 4px; transition: all 0.2s; }
+  .section-nav a:hover { color: var(--accent); background: var(--surface); }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<h1>🎯 Phase 7: ETA Engine &amp; Calibration</h1>
+<p class="subtitle">Full architecture and decision map — voicemode v1.1</p>
+
+<nav class="section-nav">
+  <a href="#overview">Overview</a>
+  <a href="#lifecycle">Lifecycle</a>
+  <a href="#formula">Formula</a>
+  <a href="#hierarchy">Key Hierarchy</a>
+  <a href="#midrun">Mid-Run</a>
+  <a href="#cold">Cold Start</a>
+  <a href="#storage">Storage</a>
+  <a href="#files">File Map</a>
+  <a href="#decisions">All Decisions</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="overview">1. System Overview — What Exists vs What Phase 7 Adds</h2>
+<p>Phase 6 built the telemetry ledger and status contract. Phase 7 adds the prediction engine on top.</p>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph LR
+    subgraph Phase6["Phase 6 — Already Built ✅"]
+        direction TB
+        VM["voice.py<br/>Worker Process"]
+        TEL["voicemode_telemetry.py<br/>Telemetry Module"]
+        LED["metrics.jsonl<br/>JSONL Ledger"]
+        STS["status.json<br/>Advisory Status"]
+        PID["pid file<br/>State Authority"]
+        VM -->|"append_ledger_row()"| LED
+        VM -->|"publish_status()"| STS
+        VM -->|"write/read"| PID
+        VM -->|"imports"| TEL
+    end
+
+    subgraph Phase7["Phase 7 — New 🆕"]
+        direction TB
+        EST["ETA Estimator<br/>predict(), revise()"]
+        CAL["calibration.json<br/>Fitted Parameters"]
+        PRI["Shipped Priors<br/>PRIOR_RTF dict"]
+        BOOT[".boot_session<br/>Cold Detection"]
+        EST -->|"read/write"| CAL
+        EST -->|"fallback"| PRI
+        EST -->|"check"| BOOT
+    end
+
+    LED -.->|"fit from"| CAL
+    STS -.->|"eta_remaining_s<br/>eta_source<br/>eta_confidence"| EST
+    VM -->|"calls"| EST
+    EST -->|"updates"| STS
+
+    style Phase6 fill:#1a2332,stroke:#30363d,color:#e6edf3
+    style Phase7 fill:#1a2a1a,stroke:#3fb950,color:#e6edf3
+    style EST fill:#2d1f4e,stroke:#bc8cff,color:#e6edf3
+    style CAL fill:#2a2210,stroke:#d29922,color:#e6edf3
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="lifecycle">2. Full Worker Lifecycle — ETA at Every Stage</h2>
+
+<div class="diagram-card">
+<pre class="mermaid">
+stateDiagram-v2
+    [*] --> Idle
+
+    Idle --> Starting : toggle (hotkey)
+    note right of Starting
+        PID file written
+        status.json: state=starting
+        No ETA shown
+    end note
+
+    Starting --> Recording : mic open
+    note right of Recording
+        Model loading in parallel
+        .boot_session checked
+        status.json: state=recording
+        ETA hidden (user still speaking)
+    end note
+
+    Recording --> Transcribing : stop signal
+    note right of Transcribing
+        Initial ETA published < 100ms
+        source: prior | calibrated | cold
+        Prefix: ~ if uncalibrated
+        Countdown begins
+    end note
+
+    Transcribing --> MidRun : segment yielded
+    note right of MidRun
+        Recalculate remaining
+        Blend observed rate after 5s
+        Apply revision rules
+        source: mid-run
+    end note
+
+    MidRun --> MidRun : next segment
+    MidRun --> Overrun : ETA expires
+    note right of Overrun
+        Hold 1s → Finishing…
+        overrun: true in status
+        Recorded in ledger
+    end note
+
+    MidRun --> Inserting : decode complete
+    Overrun --> Inserting : decode complete
+
+    Inserting --> Finalizing : text pasted
+    note right of Finalizing
+        Update calibration.json
+        Append ledger row
+        Record prediction accuracy
+    end note
+
+    Finalizing --> Idle : cleanup
+    note right of Idle
+        Remove status.json
+        Remove pid (on success)
+    end note
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="formula">3. ETA Formula Breakdown</h2>
+
+<div class="note">
+  <strong>ETA-01:</strong> <code>ETA = remaining_load + rate × remaining_audio + finalize + insert</code><br/>
+  where <code>rate = Σ(decode_s) / Σ(audio_s)</code> — ratio of sums, never mean of ratios.
+</div>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph TD
+    subgraph Formula["ETA = remaining_load + rate × remaining_audio + finalize + insert"]
+        direction LR
+        RL["remaining_load<br/><i>max(0, load_s - elapsed_record)</i>"]
+        RATE["rate<br/><i>Σdecode / Σaudio</i>"]
+        RA["remaining_audio<br/><i>total_audio - decoded_audio</i>"]
+        FIN["finalize_s<br/><i>0.4s prior</i>"]
+        INS["insert_s<br/><i>0.2s prior</i>"]
+    end
+
+    subgraph Sources["Where Each Component Comes From"]
+        direction TB
+        CAL2["calibration.json"]
+        PRI2["Shipped Priors"]
+        RUN["This Run's<br/>Observed Data"]
+        BOOT2[".boot_session"]
+    end
+
+    CAL2 -->|"calibrated rate,<br/>load_s, finalize_s"| RATE
+    CAL2 -->|"calibrated load_s"| RL
+    PRI2 -->|"fallback if<br/>no calibration"| RATE
+    PRI2 -->|"cold run load"| RL
+    RUN -->|"elapsed_record_s"| RL
+    RUN -->|"decoded_audio_s"| RA
+    RUN -->|"blend after ≥5s"| RATE
+    BOOT2 -->|"cold?"| RL
+
+    style Formula fill:#1a2332,stroke:#58a6ff,color:#e6edf3
+    style Sources fill:#1a2a1a,stroke:#3fb950,color:#e6edf3
+</pre>
+</div>
+
+<h3>Initial vs Mid-Run ETA</h3>
+<table class="decision-table">
+<tr><th>Stage</th><th>remaining_load</th><th>rate</th><th>remaining_audio</th><th>source</th></tr>
+<tr>
+  <td><strong>Initial</strong> (stop signal)</td>
+  <td><code>max(0, est_load - recording_time)</code></td>
+  <td>From calibration.json or prior</td>
+  <td><code>total_audio - already_decoded</code></td>
+  <td><code>prior</code> / <code>calibrated</code> / <code>cold</code></td>
+</tr>
+<tr>
+  <td><strong>Mid-run</strong> (after segments)</td>
+  <td><code>0</code> (model loaded)</td>
+  <td>Blend: calibrated + this run's observed (if ≥5s decoded)</td>
+  <td><code>total_audio - decoded_so_far</code></td>
+  <td><code>mid-run</code></td>
+</tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="hierarchy">4. Key Hierarchy &amp; Fallback Chain</h2>
+
+<div class="note">
+  Calibration key from Phase 6: <code>model|device|compute_type|backend|beam_size|vad_filter|language|chunk_s</code><br/>
+  Example: <code>medium.en|cpu|int8|ctranslate2|1|true|en|30</code>
+</div>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph TD
+    Q{"n ≥ 3<br/>at this level?"}
+
+    L0["<b>L0: Exact Key</b><br/>All 8 fields<br/><i>medium.en|cpu|int8|ct2|1|true|en|30</i>"]
+    L1["<b>L1: Drop chunk + vad</b><br/>6 fields<br/><i>medium.en|cpu|int8|ct2|1|en</i>"]
+    L2["<b>L2: Core only</b><br/>4 fields<br/><i>medium.en|cpu|int8|ct2</i>"]
+    L3["<b>L3: Shipped Prior</b><br/>Model family only<br/><i>PRIOR_RTF['medium'] = 0.95</i>"]
+
+    L0 --> Q
+    Q -->|"Yes"| USE0["Use L0 rate"]
+    Q -->|"No"| L1
+    L1 --> Q1{"n ≥ 3?"}
+    Q1 -->|"Yes"| USE1["Use L1 rate"]
+    Q1 -->|"No"| L2
+    L2 --> Q2{"n ≥ 3?"}
+    Q2 -->|"Yes"| USE2["Use L2 rate"]
+    Q2 -->|"No"| L3
+    L3 --> USE3["Use Prior"]
+
+    subgraph Shrinkage["Shrinkage Blending"]
+        direction TB
+        BL["weight = min(1.0, n / 10)<br/><br/>result = weight × narrow_rate<br/>+ (1 - weight) × broader_rate"]
+    end
+
+    USE0 --> BL
+    USE1 --> BL
+    USE2 --> BL
+
+    style L0 fill:#1a3a1a,stroke:#3fb950,color:#e6edf3
+    style L1 fill:#2a3310,stroke:#d29922,color:#e6edf3
+    style L2 fill:#2d2010,stroke:#d29922,color:#e6edf3
+    style L3 fill:#2d1a1a,stroke:#f85149,color:#e6edf3
+    style Shrinkage fill:#2d1f4e,stroke:#bc8cff,color:#e6edf3
+    style USE3 fill:#2d1a1a,stroke:#f85149,color:#e6edf3
+</pre>
+</div>
+
+<h3>Shrinkage Example</h3>
+<table class="decision-table">
+<tr><th>Samples (n)</th><th>Weight</th><th>Effect</th></tr>
+<tr><td>3</td><td>0.3</td><td>30% narrow key, 70% broader key — still heavily anchored</td></tr>
+<tr><td>5</td><td>0.5</td><td>50/50 blend</td></tr>
+<tr><td>10+</td><td>1.0</td><td>100% narrow key — fully trusted</td></tr>
+</table>
+
+<h3>Exclusions (what never enters the accumulators)</h3>
+<table class="decision-table">
+<tr><th>Exclusion</th><th>Reason</th></tr>
+<tr><td><code>outcome ≠ success</code></td><td>Errors, cancels, timeouts corrupt rate</td></tr>
+<tr><td>GPU→CPU fallback</td><td>Different hardware path</td></tr>
+<tr><td>Cold runs</td><td>Model load inflates total time</td></tr>
+<tr><td><code>load_ms > 3× calibrated</code></td><td>System contention proxy</td></tr>
+<tr><td>Outliers (rate outside [0.01, 10.0])</td><td>Garbage data</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="midrun">5. Mid-Run Revision State Machine</h2>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph TD
+    SEG["Segment Yielded<br/>by Whisper Generator"]
+    CALC["Recalculate<br/>remaining ETA"]
+    CMP{"New remaining<br/>vs displayed?"}
+
+    DOWN["⬇ Lower<br/>(faster than expected)"]
+    SAME["= Same or negligible"]
+    UP["⬆ Higher<br/>(slower than expected)"]
+
+    DACT["Immediately step down<br/>to lower integer"]
+    SACT["Keep counting down<br/>at 1 Hz"]
+    UCHECK{"Jump ≥ 1.0s<br/>AND ≥ 2.0s since<br/>last revision?"}
+    UYES["Revise upward<br/>increment revision_count<br/>record last_revised_at"]
+    UNO["Suppress — keep<br/>current countdown"]
+
+    SEG --> CALC
+    CALC --> CMP
+    CMP -->|"Lower"| DOWN
+    CMP -->|"≈ Same"| SAME
+    CMP -->|"Higher"| UP
+
+    DOWN --> DACT
+    SAME --> SACT
+    UP --> UCHECK
+    UCHECK -->|"Yes"| UYES
+    UCHECK -->|"No"| UNO
+
+    subgraph Overrun["Overrun Sequence"]
+        direction LR
+        T2["2s"] --> T1["1s<br/>(hold 1 second)"]
+        T1 --> FIN["Finishing…<br/>(indefinite)"]
+        FIN --> DONE["Text insertion<br/>begins"]
+    end
+
+    DACT -.->|"if ≤ 1s"| Overrun
+    UYES -.->|"publish"| STATUS["status.json<br/>eta_remaining_s<br/>revision_count<br/>last_revised_at"]
+
+    style Overrun fill:#2d1a1a,stroke:#f85149,color:#e6edf3
+    style STATUS fill:#2a2210,stroke:#d29922,color:#e6edf3
+</pre>
+</div>
+
+<h3>Display Rules Summary</h3>
+<table class="decision-table">
+<tr><th>Rule</th><th>Behavior</th></tr>
+<tr><td>Format</td><td>Single integer + <code>s</code> suffix. <code>~</code> prefix if uncalibrated. E.g. <code>~12s</code>, <code>5s</code></td></tr>
+<tr><td>Hidden during</td><td><code>starting</code>, <code>recording</code></td></tr>
+<tr><td>Shown during</td><td><code>transcribing</code>, <code>finalizing</code></td></tr>
+<tr><td>Never shows</td><td>Negative, zero, fractional, or ranged values</td></tr>
+<tr><td>Downward</td><td>Immediate step to lower integer</td></tr>
+<tr><td>Upward</td><td>≥1.0s jump AND ≥2.0s debounce</td></tr>
+<tr><td>Countdown end</td><td><code>2s → 1s</code> (hold 1s) <code>→ Finishing…</code></td></tr>
+<tr><td>Extended overrun</td><td>Stay on <code>Finishing…</code> until text insertion</td></tr>
+<tr><td><code>~</code> prefix</td><td>Persists entire countdown for uncalibrated runs</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="cold">6. Cold Start Detection &amp; Handling</h2>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph TD
+    START["Worker starts"]
+    CHECK{".boot_session<br/>exists in<br/>$XDG_RUNTIME_DIR<br/>/voice-stt/?"}
+
+    COLD["🥶 COLD RUN<br/>First since boot"]
+    WARM["🔥 WARM RUN<br/>Not first"]
+
+    CREATE["Create .boot_session<br/>(tmpfs — auto-cleared on reboot)"]
+
+    COLD_ETA["ETA uses:<br/>• Shipped prior load_s (1.2s)<br/>• Prior RTF<br/>• source = 'cold'<br/>• ~ prefix"]
+    WARM_ETA["ETA uses:<br/>• Calibrated load_s<br/>• Calibrated rate<br/>• source = 'calibrated'<br/>• No ~ if calibrated"]
+
+    COLD_FIT["Excluded from<br/>rate fitting<br/>(kept in ledger)"]
+    WARM_FIT["Included in<br/>rate fitting<br/>(updates calibration)"]
+
+    START --> CHECK
+    CHECK -->|"No"| COLD
+    CHECK -->|"Yes"| WARM
+    COLD --> CREATE
+    COLD --> COLD_ETA
+    COLD --> COLD_FIT
+    WARM --> WARM_ETA
+    WARM --> WARM_FIT
+
+    subgraph LoadAccounting["Dynamic Load Accounting"]
+        direction TB
+        LA["remaining_load =<br/>max(0, estimated_load_s - elapsed_record_s)<br/><br/>If recording > load time → 0<br/>If very short recording → partial load remains"]
+    end
+
+    COLD_ETA --> LoadAccounting
+    WARM_ETA --> LoadAccounting
+
+    style COLD fill:#2d1a1a,stroke:#f85149,color:#e6edf3
+    style WARM fill:#1a3a1a,stroke:#3fb950,color:#e6edf3
+    style LoadAccounting fill:#2d1f4e,stroke:#bc8cff,color:#e6edf3
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="storage">7. Storage Architecture &amp; Cache Lifecycle</h2>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph TD
+    subgraph Persistent["~/.local/state/voicemode/ (persistent, survives reboot)"]
+        direction TB
+        MET["metrics.jsonl<br/><i>Append-only ledger</i><br/>All runs kept"]
+        CALJ["calibration.json<br/><i>Atomic cache</i><br/>Per-key accumulators"]
+        RESET["reset_timestamp<br/><i>in calibration.json</i><br/>Rows before this ignored"]
+    end
+
+    subgraph Ephemeral["$XDG_RUNTIME_DIR/voice-stt/ (tmpfs, cleared on boot)"]
+        direction TB
+        STSJ["status.json<br/><i>Atomic advisory</i><br/>Current run state"]
+        PIDJ["pid<br/><i>State authority</i><br/>Worker ownership"]
+        BOOTJ[".boot_session<br/><i>Cold detection</i>"]
+        LOCK[".toggle.lock<br/><i>flock guard</i>"]
+    end
+
+    WORKER["Worker Process"]
+
+    WORKER -->|"1. append row"| MET
+    WORKER -->|"2. update accumulators<br/>(after text insertion)"| CALJ
+    WORKER -->|"3. publish ETA<br/>(every segment)"| STSJ
+    WORKER -->|"4. remove on exit"| STSJ
+
+    CLI["voice --status<br/>voice --reset-calibration"]
+    CLI -->|"read"| STSJ
+    CLI -->|"read"| CALJ
+    CLI -->|"delete + timestamp"| CALJ
+
+    QSHELL["Quickshell Pill<br/>(Phase 9)"]
+    QSHELL -->|"watchChanges"| STSJ
+
+    MET -.->|"rebuild if<br/>calibration.json<br/>missing"| CALJ
+
+    style Persistent fill:#1a2a1a,stroke:#3fb950,color:#e6edf3
+    style Ephemeral fill:#2a2210,stroke:#d29922,color:#e6edf3
+</pre>
+</div>
+
+<h3>calibration.json Schema (per key)</h3>
+<table class="decision-table">
+<tr><th>Field</th><th>Type</th><th>Purpose</th></tr>
+<tr><td><code>sum_decode_s</code></td><td>float</td><td>Accumulated decode time (numerator of rate)</td></tr>
+<tr><td><code>sum_audio_s</code></td><td>float</td><td>Accumulated audio duration (denominator of rate)</td></tr>
+<tr><td><code>rate</code></td><td>float</td><td>Derived: <code>sum_decode_s / sum_audio_s</code></td></tr>
+<tr><td><code>finalize_s</code></td><td>float</td><td>Calibrated finalize time</td></tr>
+<tr><td><code>load_s</code></td><td>float</td><td>Calibrated model load time</td></tr>
+<tr><td><code>n</code></td><td>int</td><td>Sample count at this key</td></tr>
+<tr><td><code>residuals</code></td><td>float[]</td><td>Last 20-30 prediction errors (for MAD confidence)</td></tr>
+<tr><td><code>confidence</code></td><td>float</td><td><code>1.0 - MAD/median_residual</code>, clamped [0, 1]</td></tr>
+<tr><td><code>updated_at</code></td><td>float</td><td>Epoch timestamp of last update</td></tr>
+</table>
+
+<div class="note warn">
+  <strong>Atomic writes:</strong> All writes to <code>calibration.json</code> use <code>tempfile + os.replace</code> with <code>0o600</code> permissions — matching the existing <code>atomic_write_json()</code> pattern. Readers never see torn JSON.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="files">8. File &amp; Module Map</h2>
+
+<div class="diagram-card">
+<pre class="mermaid">
+graph LR
+    subgraph Existing["Existing (Phase 6)"]
+        VP["voice.py<br/><i>Worker, CLI, lifecycle</i>"]
+        VT["voicemode_telemetry.py<br/><i>Ledger, status, PID,<br/>calibration_key(),<br/>prior_eta_seconds()</i>"]
+    end
+
+    subgraph New["Phase 7 Adds To"]
+        VT2["voicemode_telemetry.py<br/><i>+ ETA Estimator class<br/>+ Key hierarchy resolver<br/>+ calibration.json I/O<br/>+ Incremental accumulator<br/>+ Residuals window<br/>+ Confidence scorer</i>"]
+        VP2["voice.py<br/><i>+ Mid-run revision loop<br/>+ Display monotonicity<br/>+ Overrun state machine<br/>+ --reset-calibration<br/>+ --status --json ETA fields<br/>+ VOICE_ETA=off guard<br/>+ .boot_session check</i>"]
+    end
+
+    VP --> VT
+    VT --> VT2
+    VP --> VP2
+    VP2 --> VT2
+
+    style Existing fill:#1a2332,stroke:#30363d,color:#e6edf3
+    style New fill:#1a3a1a,stroke:#3fb950,color:#e6edf3
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 id="decisions">9. Complete Decision Register</h2>
+
+<h3>Calibration Storage &amp; Cache</h3>
+<table class="decision-table">
+<tr><th>#</th><th>Decision</th><th>Choice</th><th>Reversibility</th></tr>
+<tr><td>D7-01</td><td>Storage mechanism</td><td>Dedicated atomic cache file <code>calibration.json</code></td><td>Reversible</td></tr>
+<tr><td>D7-02</td><td>File location</td><td><code>~/.local/state/voicemode/calibration.json</code> (persistent, survives reboot)</td><td>Costly</td></tr>
+<tr><td>D7-03</td><td><code>--reset-calibration</code></td><td>Delete file + record reset timestamp (ledger preserved, pre-reset rows ignored)</td><td>Reversible</td></tr>
+<tr><td>D7-04</td><td>Update timing</td><td>Worker finalization after text insertion (never delays pasting)</td><td>Reversible</td></tr>
+<tr><td>D7-05</td><td>Per-key parameters</td><td>Comprehensive: rate, finalize_s, load_s, n, residuals window, MAD confidence</td><td>Reversible</td></tr>
+<tr><td>D7-06</td><td>Atomic write</td><td><code>tempfile + os.replace</code> with <code>0o600</code> (reuses <code>atomic_write_json</code>)</td><td>Reversible</td></tr>
+<tr><td>D7-07</td><td>Update strategy</td><td>Incremental running accumulators; full rebuild from ledger only if file missing</td><td>Reversible</td></tr>
+<tr><td>D7-08</td><td>Missing/corrupt handling</td><td>Instant prior fallback for queries; worker rebuilds async during finalization</td><td>Reversible</td></tr>
+</table>
+
+<h3>Mid-Run Revision Sensitivity</h3>
+<table class="decision-table">
+<tr><th>#</th><th>Decision</th><th>Choice</th><th>Reversibility</th></tr>
+<tr><td>D7-09</td><td>Upward revision threshold</td><td>≥1.0s jump AND ≥2.0s since last revision</td><td>Reversible</td></tr>
+<tr><td>D7-10</td><td>Downward revision</td><td>Immediate step to lower integer</td><td>Reversible</td></tr>
+<tr><td>D7-11</td><td>Revision recording</td><td><code>revision_count</code> + <code>last_revised_at</code> in status.json; total + max jump in ledger</td><td>Reversible</td></tr>
+<tr><td>D7-12</td><td>1s dwell before Finishing</td><td>Hold at <code>1s</code> for 1 second, then <code>Finishing…</code></td><td>Reversible</td></tr>
+<tr><td>D7-13</td><td>Recalculation trigger</td><td>On each Whisper segment yield</td><td>Reversible</td></tr>
+<tr><td>D7-14</td><td>Mid-run rate blending</td><td>Calibrated rate + blend with this run's observed rate after ≥5s decoded</td><td>Reversible</td></tr>
+<tr><td>D7-15</td><td><code>~</code> prefix persistence</td><td>Persists entire countdown for uncalibrated runs</td><td>Reversible</td></tr>
+<tr><td>D7-16</td><td>Extended overrun</td><td>Stay on <code>Finishing…</code> until text insertion; <code>overrun: true</code></td><td>Reversible</td></tr>
+</table>
+
+<h3>Cold Start &amp; Early-Load Accounting</h3>
+<table class="decision-table">
+<tr><th>#</th><th>Decision</th><th>Choice</th><th>Reversibility</th></tr>
+<tr><td>D7-17</td><td>Remaining load formula</td><td><code>max(0, estimated_load_s - elapsed_record_s)</code></td><td>Reversible</td></tr>
+<tr><td>D7-18</td><td>Cold vs warm calibration</td><td>Tracked separately; cold excluded from rate fitting</td><td>Costly</td></tr>
+<tr><td>D7-19</td><td>Cold run detection</td><td>Boot-only (first run after system startup)</td><td>Reversible</td></tr>
+<tr><td>D7-20</td><td>Boot detection mechanism</td><td><code>$XDG_RUNTIME_DIR/voice-stt/.boot_session</code> marker (tmpfs)</td><td>Reversible</td></tr>
+<tr><td>D7-21</td><td>Cold load estimate</td><td>Shipped prior for cold; calibrated <code>load_s</code> for warm</td><td>Reversible</td></tr>
+<tr><td>D7-22</td><td>Pre-load ETA</td><td>Publish ETA instantly before model load completes</td><td>Reversible</td></tr>
+<tr><td>D7-23</td><td><code>eta_source</code> values</td><td><code>prior</code>, <code>calibrated</code>, <code>mid-run</code>, <code>cold</code> (4 distinct)</td><td>Reversible</td></tr>
+</table>
+
+<h3>Key Hierarchy &amp; Fallback Shrinkage</h3>
+<table class="decision-table">
+<tr><th>#</th><th>Decision</th><th>Choice</th><th>Reversibility</th></tr>
+<tr><td>D7-24</td><td>Hierarchy levels</td><td>4 levels: L0 (8 fields) → L1 (6) → L2 (4) → L3 (prior)</td><td>Costly</td></tr>
+<tr><td>D7-25</td><td>Minimum samples</td><td>3 per level (matches ETA-02)</td><td>Reversible</td></tr>
+<tr><td>D7-26</td><td>Shrinkage blend</td><td><code>weight = min(1.0, n/10)</code></td><td>Reversible</td></tr>
+<tr><td>D7-27</td><td>Rate statistic</td><td>Ratio of sums (<code>Σdecode / Σaudio</code>); outlier resistance via exclusion-before-accumulation</td><td>Costly</td></tr>
+<tr><td>D7-28</td><td>Confidence formula</td><td><code>1.0 - MAD/median_residual</code> clamped [0,1] on residuals window</td><td>Reversible</td></tr>
+<tr><td>D7-29</td><td>Per-level accumulators</td><td>Stored in calibration.json for instant lookup</td><td>Reversible</td></tr>
+<tr><td>D7-30</td><td>Level + n recording</td><td>Both status.json and ledger row</td><td>Reversible</td></tr>
+<tr><td>D7-31</td><td>Exclusion set</td><td>Failures + fallbacks + outliers + cold + high-load + GPU→CPU + load > 3× calibrated</td><td>Reversible</td></tr>
+</table>
+
+<h3>Resolved Conflicts</h3>
+<table class="decision-table">
+<tr><th>Conflict</th><th>Resolution</th></tr>
+<tr><td>Ratio of sums vs median of per-run rates</td><td><strong>Ratio of sums wins</strong> (ETA-01). MAD/median used only on prediction <em>residuals</em> for confidence, not for rate fitting.</td></tr>
+<tr><td><code>eta_source: cold</code> vs <code>prior</code> overlap</td><td><strong>Distinct.</strong> <code>cold</code> = known cold boot with inflated load; <code>prior</code> = no calibration data at all (fresh install). Same prior values, different diagnostic meaning.</td></tr>
+<tr><td>Incremental accumulators vs median-based fitting</td><td><strong>Accumulators for rate</strong>, residuals window for confidence only. No per-run rate array needed for the core estimate.</td></tr>
+</table>
+
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#2d1f4e',
+    primaryTextColor: '#e6edf3',
+    primaryBorderColor: '#bc8cff',
+    lineColor: '#58a6ff',
+    secondaryColor: '#1a2332',
+    tertiaryColor: '#1a3a1a',
+    noteBkgColor: '#161b22',
+    noteTextColor: '#e6edf3',
+    noteBorderColor: '#30363d'
+  },
+  flowchart: { curve: 'basis', htmlLabels: true },
+  stateDiagram: { htmlLabels: true }
+});
+</script>
+</body>
+</html>
