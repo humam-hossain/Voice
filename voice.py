@@ -68,6 +68,8 @@ DEFAULT_CHUNK_SECONDS = 180.0
 SKIPPED_SEGMENT_MARKER = "[SKIPPING 3MIN SEG]"
 DEFAULT_STT_TIMEOUT_SECONDS = 300.0
 DEFAULT_TTS_MAX_CHARS = int(os.getenv("VOICE_TTS_MAX_CHARS", "5000"))
+import voicemode_telemetry as _vmtele
+PID_STATES = _vmtele.PID_STATES
 
 KOKORO_ASSETS = [
     {
@@ -865,19 +867,21 @@ def cancel_active_stt() -> None:
 
 
 def cancel_recording(args: argparse.Namespace) -> int:
-    pid, state = read_pid_state(PID_FILE)
-    if pid and process_alive(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass
-        remove_pid(pid)
-        play_cue(args, "stop")
-        notify(APP_NAME, "Recording cancelled.", args)
-        print("Cancelled voice recording.")
+    import voicemode_telemetry
+    with voicemode_telemetry.with_pid_lock():
+        pid, state = read_pid_state(PID_FILE)
+        if pid and process_alive(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            remove_pid(pid)
+            play_cue(args, "stop")
+            notify(APP_NAME, "Recording cancelled.", args)
+            print("Cancelled voice recording.")
+            return 0
+        print("No active voice recording to cancel.")
         return 0
-    print("No active voice recording to cancel.")
-    return 0
 
 
 def max_recording_seconds() -> float:
@@ -1654,54 +1658,61 @@ def background_argv(args: argparse.Namespace) -> list[str]:
 
 
 def toggle_background_recording(args: argparse.Namespace) -> int:
+    import voicemode_telemetry
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    pid, state = read_pid_state()
-    if pid and process_alive(pid):
-        if state == "starting":
-            # Double-tap race mitigation (D-11): wait up to 300ms for child to transition to "recording"
-            deadline = time.monotonic() + 0.300
-            while time.monotonic() < deadline:
-                time.sleep(0.02)
-                pid, state = read_pid_state()
-                if not pid or not process_alive(pid):
-                    break
-                if state != "starting":
-                    break
-
+    with voicemode_telemetry.with_pid_lock():
+        pid, state = read_pid_state()
         if pid and process_alive(pid):
-            if state == "transcribing":
+            if state == "starting":
+                deadline = time.monotonic() + 0.300
+                while time.monotonic() < deadline:
+                    time.sleep(0.02)
+                    pid, state = read_pid_state()
+                    if not pid or not process_alive(pid):
+                        break
+                    if state != "starting":
+                        break
+
+            if pid and process_alive(pid):
+                if state == "transcribing":
+                    play_cue(args, "error")
+                    print("Voice STT is currently transcribing and inserting text. Please wait...", file=sys.stderr)
+                    return 0
+                if state == "recording":
+                    try:
+                        os.kill(pid, signal.SIGUSR1)
+                    except ProcessLookupError:
+                        pass
+                    print("Stopping voice recording...")
+                    return 0
                 play_cue(args, "error")
-                print("Voice STT is currently transcribing and inserting text. Please wait...", file=sys.stderr)
-                return 0
-            if state == "recording":
-                os.kill(pid, signal.SIGUSR1)
-                print("Stopping voice recording...")
+                print(f"Voice worker busy ({state}).", flush=True)
                 return 0
 
-    if pid:
-        remove_pid(pid)
+        if pid:
+            remove_pid(pid)
 
-    # Symmetric mutual exclusion (D-14): silence TTS playback before starting STT
-    stop_tts(args, quiet=True)
+        stop_tts(args, quiet=True)
 
-    log = LOG_FILE.open("a", encoding="utf-8")
-    log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start ---\n")
-    log.flush()
-    proc = subprocess.Popen(
-        background_argv(args),
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        close_fds=True,
-    )
-    log.close()
-    write_pid_state(proc.pid, "starting")
-    print("Started voice recording. Run `voice --toggle` again to stop.")
-    return 0
+        log = LOG_FILE.open("a", encoding="utf-8")
+        log.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} start ---\n")
+        log.flush()
+        proc = subprocess.Popen(
+            background_argv(args),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+        log.close()
+        write_pid_state(proc.pid, "starting")
+        print("Started voice recording. Run `voice --toggle` again to stop.")
+        return 0
 
 
 def run_background_recording(args: argparse.Namespace) -> int:
+    import voicemode_telemetry
     stop_requested = False
     cancel_requested = False
     pid = os.getpid()
@@ -1712,6 +1723,34 @@ def run_background_recording(args: argparse.Namespace) -> int:
     t_start = time.monotonic()
     text = ""
     outcome = "success"
+    status_lock = threading.Lock()
+    status_state = {
+        "pid": pid,
+        "run_id": run_id,
+        "started_at": ts_start,
+        "audio_s": 0.0,
+        "segments": 0,
+        "segments_done": 0,
+        "eta_remaining_s": None,
+        "eta_confidence": None,
+        "eta_source": None,
+        "overrun": False,
+        "report_path": None,
+    }
+    def _publish_status(state, phase, **deltas):
+        try:
+            if not voicemode_telemetry.get_metrics_enabled():
+                return
+            with status_lock:
+                s = dict(status_state)
+                s.update(deltas)
+                status_state.update(deltas)
+            try:
+                voicemode_telemetry.publish_status(voicemode_telemetry.build_status(**s, state=state, phase=phase))
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def handle_usr1(signum, frame) -> None:
         nonlocal stop_requested
@@ -1726,6 +1765,12 @@ def run_background_recording(args: argparse.Namespace) -> int:
     duration = 0.0
     total_chunks = 0
     try:
+        current_pid, _ = read_pid_state()
+        if current_pid is not None and current_pid != pid and process_alive(current_pid):
+            print(f"Another voice worker (pid {current_pid}) already owns the lock; exiting.", flush=True)
+            play_cue(args, "error")
+            return 0
+        _publish_status("starting", "init")
         input_device = parse_device(args.input_device)
         sample_rate = resolve_sample_rate(input_device, args.sample_rate)
         seg_duration = chunk_seconds(args)
@@ -1739,6 +1784,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, handle_cancel)
         signal.signal(signal.SIGINT, handle_cancel)
         write_pid_state(pid, "recording")
+        _publish_status("recording", "capture", audio_s=0.0, segments=0, segments_done=0)
 
         play_cue(args, "start")
         active_stage = "recording/capture"
@@ -1755,6 +1801,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             if args.beep and beep_interval > 0
             else None
         )
+        next_status_at = time.monotonic() + voicemode_telemetry.STATUS_HEARTBEAT_S
 
         while not stop_requested and not cancel_requested:
             if recorder.started_at and (time.monotonic() - recorder.started_at) >= ceiling:
@@ -1767,6 +1814,14 @@ def run_background_recording(args: argparse.Namespace) -> int:
             if next_recording_cue is not None and time.monotonic() >= next_recording_cue:
                 play_cue(args, "recording")
                 next_recording_cue = time.monotonic() + beep_interval
+            if time.monotonic() >= next_status_at:
+                try:
+                    live = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
+                    segs = int(math.ceil(live / seg_duration)) if seg_duration and seg_duration > 0 else 0
+                    _publish_status("recording", "capture", audio_s=live, segments=segs)
+                except Exception:
+                    pass
+                next_status_at = time.monotonic() + voicemode_telemetry.STATUS_HEARTBEAT_S
             time.sleep(0.05)
 
         if cancel_requested:
@@ -1775,33 +1830,40 @@ def run_background_recording(args: argparse.Namespace) -> int:
             return 0
 
         write_pid_state(pid, "transcribing")
+        t_transcribing = time.monotonic()
         active_stage = "WAV finalization"
+        try:
+            live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
+            remaining = voicemode_telemetry.prior_eta_seconds(live_audio, getattr(args, "model", None))
+            segs_est = int(math.ceil(live_audio / seg_duration)) if seg_duration and seg_duration > 0 else 0
+            _publish_status("transcribing", "finalize", audio_s=live_audio, segments=segs_est, segments_done=0,
+                            eta_remaining_s=remaining, eta_confidence="low", eta_source="prior", overrun=False)
+        except Exception:
+            pass
         raw_paths, duration, should_delete = recorder.stop_to_wav(args.save_dir)
         wav_paths = [Path(p) for p in (raw_paths if isinstance(raw_paths, (list, tuple)) else [raw_paths])]
         play_cue_async(args, "stop")
         total_chunks = len(wav_paths)
         chunk_str = f"{total_chunks} segment" if total_chunks == 1 else f"{total_chunks} segments"
         print(f"Stopped ({duration:.1f}s, {chunk_str}). Transcribing...", flush=True)
-        if voicemode_telemetry.get_metrics_enabled():
-            voicemode_telemetry.publish_status({
-                "pid": pid,
-                "run_id": run_id,
-                "state": "transcribing",
-                "phase": "finalize",
-                "started_at": ts_start,
-                "expires_at": time.time() + 30.0,
-                "audio_s": round(duration, 3),
-                "segments": total_chunks,
-                "segments_done": 0,
-                "eta_epoch": None,
-                "eta_remaining_s": None,
-                "eta_confidence": "low",
-                "eta_source": "prior",
-                "overrun": False,
-                "report_path": None,
-            })
+        try:
+            d = round(float(duration), 3)
+            remaining = voicemode_telemetry.prior_eta_seconds(d, getattr(args, "model", None))
+            try:
+                spent = time.monotonic() - t_transcribing
+                remaining = max(0.0, float(remaining) - float(spent))
+            except Exception:
+                pass
+            _publish_status("transcribing", "finalize", audio_s=d, segments=total_chunks, segments_done=0,
+                            eta_remaining_s=remaining, eta_confidence="low", eta_source="prior", overrun=False)
+        except Exception:
+            pass
 
         active_stage = "Whisper model loading"
+        try:
+            _publish_status("transcribing", "load")
+        except Exception:
+            pass
         model_state = load_model(args)
 
         active_stage = "Whisper transcription"
@@ -1851,11 +1913,21 @@ def run_background_recording(args: argparse.Namespace) -> int:
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
+            try:
+                _publish_status("typing", "insert")
+            except Exception:
+                pass
             if insert_text(text, args, raise_errors=True):
                 print("Transcript inserted.", flush=True)
                 # Routine "Transcript inserted." toast suppressed per D-17
             else:
                 raise RuntimeError("transcript insertion returned an unsuccessful result")
+        elif text and not args.paste:
+            write_pid_state(pid, "typing")
+            try:
+                _publish_status("typing", "insert")
+            except Exception:
+                pass
         elif text:
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:

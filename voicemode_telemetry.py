@@ -396,11 +396,15 @@ def append_ledger_row(record: dict) -> bool:
 def publish_status(status: dict) -> bool:
     if not get_metrics_enabled():
         return False
-    status_to_write = dict(status)
-    status_to_write.setdefault("schema", STATUS_SCHEMA_VERSION)
-    status_to_write["updated_at"] = time.time()
-    atomic_write_json(get_state_dir() / STATUS_FILENAME, status_to_write, 0o600)
-    return True
+    try:
+        status_to_write = dict(status)
+        status_to_write.setdefault("schema", STATUS_SCHEMA_VERSION)
+        status_to_write["updated_at"] = time.time()
+        validate_status(status_to_write)
+        atomic_write_json(get_state_dir() / STATUS_FILENAME, status_to_write, 0o600)
+        return True
+    except Exception:
+        raise
 
 
 def read_status() -> Optional[dict]:
@@ -509,3 +513,170 @@ def with_pid_lock(lock_path: Optional[Path] = None) -> Iterator[None]:
         except Exception:
             pass
         os.close(fd)
+
+
+# Status contract v1
+STATUS_V1_KEYS = [
+    "schema", "pid", "run_id", "state", "phase", "started_at", "updated_at",
+    "expires_at", "audio_s", "segments", "segments_done", "eta_epoch",
+    "eta_remaining_s", "eta_confidence", "eta_source", "overrun", "report_path"
+]
+PID_STATES = ("starting", "recording", "transcribing", "typing", "speaking")
+STATUS_PHASES = ("init", "capture", "finalize", "load", "decode", "insert", "wrap-up")
+STATUS_HEARTBEAT_S = 5.0
+STATUS_TTL_S = 30.0
+STATUS_MAX_BYTES = 1024
+
+PRIOR_RTF = {"tiny": 0.25, "base": 0.35, "small": 0.55, "medium": 0.95, "large": 1.6}
+PRIOR_FINALIZE_S = 0.4
+PRIOR_LOAD_S = 1.2
+PRIOR_INSERT_S = 0.2
+
+
+def prior_eta_seconds(audio_s, model):
+    try:
+        model_str = str(model).lower()
+        prefix = model_str.split(".")[0].split("-")[0]
+        rtf = PRIOR_RTF.get(prefix, PRIOR_RTF["medium"])
+        return round(PRIOR_FINALIZE_S + PRIOR_LOAD_S + rtf * max(0.0, float(audio_s)) + PRIOR_INSERT_S, 2)
+    except Exception:
+        return round(PRIOR_FINALIZE_S + PRIOR_LOAD_S + PRIOR_RTF["medium"] * max(0.0, float(audio_s)) + PRIOR_INSERT_S, 2)
+
+
+def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expires_at=None,
+                  audio_s=0.0, segments=0, segments_done=0, eta_epoch=None, eta_remaining_s=None,
+                  eta_confidence=None, eta_source=None, overrun=False, report_path=None):
+    now = time.time()
+    if updated_at is None:
+        updated_at = now
+    # Clamp negative ETA
+    if eta_remaining_s is not None:
+        try:
+            if float(eta_remaining_s) < 0:
+                eta_remaining_s = 0.0
+        except Exception:
+            pass
+    try:
+        audio_s_r = round(float(audio_s), 3)
+    except Exception:
+        audio_s_r = 0.0
+    try:
+        segments_i = int(segments)
+    except Exception:
+        segments_i = 0
+    try:
+        segments_done_i = int(segments_done)
+    except Exception:
+        segments_done_i = 0
+    if segments_i > 0 and segments_done_i > segments_i:
+        segments_done_i = segments_i
+    if eta_remaining_s is not None:
+        try:
+            eta_remaining_s_r = round(float(eta_remaining_s), 2)
+        except Exception:
+            eta_remaining_s_r = eta_remaining_s
+    else:
+        eta_remaining_s_r = None
+    if eta_epoch is None and eta_remaining_s_r is not None:
+        try:
+            eta_epoch = round(float(updated_at) + float(eta_remaining_s_r), 3)
+        except Exception:
+            eta_epoch = None
+    elif eta_epoch is not None:
+        try:
+            eta_epoch = eta_epoch
+        except Exception:
+            pass
+    if expires_at is None:
+        expires_at = round(float(updated_at) + STATUS_TTL_S, 3)
+    else:
+        try:
+            expires_at = round(float(expires_at), 3)
+        except Exception:
+            expires_at = round(float(updated_at) + STATUS_TTL_S, 3)
+    
+    status = {}
+    status["schema"] = 1
+    status["pid"] = int(pid)
+    status["run_id"] = run_id
+    status["state"] = state
+    status["phase"] = phase
+    status["started_at"] = started_at
+    status["updated_at"] = updated_at
+    status["expires_at"] = expires_at
+    status["audio_s"] = audio_s_r
+    status["segments"] = segments_i
+    status["segments_done"] = segments_done_i
+    status["eta_epoch"] = eta_epoch
+    status["eta_remaining_s"] = eta_remaining_s_r
+    status["eta_confidence"] = eta_confidence
+    status["eta_source"] = eta_source
+    status["overrun"] = bool(overrun)
+    status["report_path"] = report_path
+    return validate_status(status)
+
+
+def validate_status(status):
+    if not isinstance(status, dict):
+        raise ValueError("status must be dict")
+    for k in status:
+        if k not in STATUS_V1_KEYS:
+            raise ValueError(f"unknown key: {k}")
+    if status.get("schema") != 1:
+        raise ValueError("schema must be 1")
+    if status.get("state") not in PID_STATES:
+        raise ValueError("invalid state")
+    if status.get("phase") not in STATUS_PHASES:
+        raise ValueError("invalid phase")
+    try:
+        pid = status.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            raise ValueError("invalid pid")
+    except Exception:
+        raise ValueError("invalid pid")
+    run_id = status.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("invalid run_id")
+    eta_remain = status.get("eta_remaining_s")
+    if eta_remain is not None:
+        try:
+            if float(eta_remain) < 0:
+                raise ValueError("negative eta")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+    segments = status.get("segments", 0)
+    segments_done = status.get("segments_done", 0)
+    try:
+        if int(segments) > 0 and int(segments_done) > int(segments):
+            raise ValueError("segments_done > segments")
+    except ValueError:
+        raise
+    except Exception:
+        pass
+    try:
+        s = json.dumps(status, separators=(",", ":"), ensure_ascii=True)
+        if len(s.encode("utf-8")) > STATUS_MAX_BYTES:
+            raise ValueError("status too large")
+    except ValueError:
+        raise
+    except Exception:
+        pass
+    return status
+
+
+def status_expired(status, now=None):
+    if not isinstance(status, dict):
+        return True
+    try:
+        expires_at = status.get("expires_at")
+        if expires_at is None:
+            return True
+        if now is None:
+            now = time.time()
+        return float(now) >= float(expires_at)
+    except Exception:
+        return True
+
+
