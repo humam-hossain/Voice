@@ -1,12 +1,12 @@
 ---
-status: complete
+status: diagnosed
 phase: 07-eta-engine-and-calibration
 source:
   - 07-01-SUMMARY.md
   - 07-02-SUMMARY.md
   - 07-03-SUMMARY.md
 started: 2026-10-29T05:52:00Z
-updated: 2026-10-29T07:18:00Z
+updated: 2026-10-29T07:19:00Z
 ---
 
 ## Current Test
@@ -73,5 +73,18 @@ skipped: 0
   reason: "User reported: there is no status overlay or PILO nothing appears, like everything is just like before so that is the issue, like what i wanted was that as i am recording the audio for each chunk of audio there is supposed to be converted in parallel so when it is getting converted there should be another time clock that will show that ok this is how much seconds have been already confirmed convert it to text add that to the time, this is the total time that has been added, currently I am seeing the previous recording my audio is the timer not the other things like the other one so that's how I want to do it. like X:XX | X:XX (first one for showing audio recording | second one for how much audio has been transcribed to text)"
   severity: major
   test: 7
-  artifacts: []
-  missing: []
+  root_cause: "Status contract and worker do not publish parallel chunk transcribed_audio_s to status.json during recording, and Quickshell Voice.qml/VoicePill.qml only monitors recorder.pid without reading status.json or rendering dual-timers X:XX | X:XX"
+  artifacts:
+    - path: "voicemode_telemetry.py"
+      issue: "STATUS_V1_KEYS does not expose transcribed_audio_s"
+    - path: "voice.py"
+      issue: "worker_consumer does not publish transcribed_audio_s during active recording chunks"
+    - path: "/home/pera/.config/quickshell/ii/services/Voice.qml"
+      issue: "FileView does not read status.json and lacks transcribedSeconds / eta properties"
+    - path: "/home/pera/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"
+      issue: "displayText does not render dual timer X:XX | X:XX or ETA countdown pill"
+  missing:
+    - "Extend status schema and worker publishing to emit transcribed_audio_s during parallel chunk decoding"
+    - "Connect Quickshell Voice.qml to status.json and expose transcribed duration and ETA properties"
+    - "Update VoicePill.qml displayText to render X:XX | X:XX during recording and live ETA countdown during transcribing"
+  debug_session: .planning/debug/status-pill-dual-timer.md
