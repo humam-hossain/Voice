@@ -511,7 +511,182 @@ class TestExportFormats(TempXdgTestCase):
         report_path = voicemode_report.generate_prerendered_report()
         self.assertTrue(report_path.exists())
         content = report_path.read_text()
-        self.assertIn("Voice Accuracy Report", content)
+        self.assertIn("Voicemode Accuracy Report", content)
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (Plan 08-02): Inline SVG Charts Tests
+# ---------------------------------------------------------------------------
+
+class TestSVGCharts(TempXdgTestCase):
+    """Task 1: Fluid responsive inline SVG chart engines."""
+
+    def test_scatter_svg_geometry_and_tooltips(self):
+        """Scatter plot contains viewBox, 1:1 diagonal, native tooltips, and 3-tier colors."""
+        records = [
+            _make_record(run_id="r1", pred_s=1.0, actual_s=1.0),   # 0% error -> green
+            _make_record(run_id="r2", pred_s=1.2, actual_s=1.0),   # 20% error -> amber
+            _make_record(run_id="r3", pred_s=2.0, actual_s=1.0),   # 100% error -> crimson
+        ]
+        metrics = voicemode_report.compute_report_metrics(records)
+        svg = voicemode_report.render_scatter_svg(records, metrics)
+
+        self.assertIn('viewBox="0 0 500 320"', svg)
+        self.assertIn('stroke-dasharray="4,4"', svg)  # diagonal line
+        self.assertIn("<title>", svg)
+        self.assertIn("Run r1:", svg)
+        self.assertIn(voicemode_report.COLOR_GREEN, svg)
+        self.assertIn(voicemode_report.COLOR_AMBER, svg)
+        self.assertIn(voicemode_report.COLOR_CRIMSON, svg)
+
+    def test_scatter_svg_single_run(self):
+        """Scatter plot handles single run without dividing by zero."""
+        records = [_make_record(run_id="r1", pred_s=2.0, actual_s=2.0)]
+        metrics = voicemode_report.compute_report_metrics(records)
+        svg = voicemode_report.render_scatter_svg(records, metrics)
+        self.assertIn('viewBox="0 0 500 320"', svg)
+        self.assertIn("<circle", svg)
+
+    def test_scatter_svg_empty(self):
+        """Scatter plot handles empty records gracefully."""
+        svg = voicemode_report.render_scatter_svg([], voicemode_report.compute_report_metrics([]))
+        self.assertIn('viewBox="0 0 500 320"', svg)
+
+    def test_trend_svg_geometry_and_lines(self):
+        """Trend chart contains polyline, 15% and 30% reference lines."""
+        records = [_make_record(run_id=f"r-{i}", pred_s=2.0 + i * 0.1, actual_s=2.0) for i in range(5)]
+        metrics = voicemode_report.compute_report_metrics(records)
+        svg = voicemode_report.render_trend_svg(records, metrics)
+
+        self.assertIn('viewBox="0 0 500 320"', svg)
+        self.assertIn("<polyline", svg)
+        self.assertIn("15%", svg)
+        self.assertIn("30%", svg)
+        self.assertIn("<title>", svg)
+
+    def test_histogram_svg_bins(self):
+        """Histogram bins residuals and renders rect bars with title tags."""
+        records = [
+            _make_record(run_id="r1", pred_s=2.1, actual_s=2.0),  # residual 0.1 -> bin 0
+            _make_record(run_id="r2", pred_s=2.4, actual_s=2.0),  # residual 0.4 -> bin 1
+            _make_record(run_id="r3", pred_s=2.9, actual_s=2.0),  # residual 0.9 -> bin 3
+            _make_record(run_id="r4", pred_s=4.5, actual_s=2.0),  # residual 2.5 -> bin 6
+        ]
+        metrics = voicemode_report.compute_report_metrics(records)
+        svg = voicemode_report.render_histogram_svg(records, metrics)
+
+        self.assertIn('viewBox="0 0 500 320"', svg)
+        self.assertIn("<rect", svg)
+        self.assertIn("0-0.25s", svg)
+        self.assertIn(">3s", svg)
+        self.assertIn("<title>", svg)
+
+    def test_stage_bars_svg_decomposition(self):
+        """Stage breakdown renders stacked bars with stage colors."""
+        records = [_make_record(run_id=f"r-{i}", load_ms=100.0, decode_ms=800.0, finalize_ms=40.0, insert_ms=20.0) for i in range(3)]
+        metrics = voicemode_report.compute_report_metrics(records)
+        svg = voicemode_report.render_stage_bars_svg(records, metrics)
+
+        self.assertIn('viewBox="0 0 500 320"', svg)
+        self.assertIn(voicemode_report.COLOR_LOAD, svg)
+        self.assertIn(voicemode_report.COLOR_DECODE, svg)
+        self.assertIn(voicemode_report.COLOR_FINALIZE, svg)
+        self.assertIn(voicemode_report.COLOR_INSERT, svg)
+        self.assertIn("Load", svg)
+        self.assertIn("Decode", svg)
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (Plan 08-02): HTML Report Tests
+# ---------------------------------------------------------------------------
+
+class TestHTMLReport(TempXdgTestCase):
+    """Task 2: Standalone dark HTML report generator."""
+
+    def test_html_report_zero_js_and_self_contained(self):
+        """RPT-02: HTML report contains zero <script> tags, zero http(s) links, and all 4 SVG charts."""
+        records = [_make_record(run_id=f"r-{i}", audio_s=2.0 + i) for i in range(10)]
+        metrics = voicemode_report.compute_report_metrics(records)
+        html_doc = voicemode_report.render_html_report(records, metrics)
+
+        self.assertTrue(html_doc.startswith("<!DOCTYPE html>"))
+        self.assertNotIn("<script", html_doc.lower())
+        self.assertNotIn("http://", html_doc.lower())
+        self.assertNotIn("https://", html_doc.lower())
+        self.assertNotIn("onclick", html_doc.lower())
+        self.assertIn("viewBox=", html_doc)
+        self.assertIn("<title>", html_doc)
+        self.assertIn("privacy-card", html_doc)
+
+    def test_html_report_table_and_cards(self):
+        """RPT-02: HTML report includes 4 hero metric cards, 2x2 chart grid, and scrollable runs table."""
+        records = [
+            _make_record(run_id="r1", pred_s=1.0, actual_s=1.0),
+            _make_record(run_id="r2", pred_s=1.2, actual_s=1.0),
+            _make_record(run_id="r3", pred_s=2.0, actual_s=1.0),
+        ]
+        metrics = voicemode_report.compute_report_metrics(records)
+        html_doc = voicemode_report.render_html_report(records, metrics)
+
+        self.assertIn("Total Runs", html_doc)
+        self.assertIn("Median Error", html_doc)
+        self.assertIn("P90 Latency", html_doc)
+        self.assertIn("Calibration Tier", html_doc)
+        self.assertIn("chart-grid", html_doc)
+        self.assertIn("runs-table-container", html_doc)
+        self.assertIn("badge-green", html_doc)
+        self.assertIn("badge-amber", html_doc)
+        self.assertIn("badge-crimson", html_doc)
+
+    def test_html_escaping(self):
+        """Special characters in model or run_id are escaped to prevent XSS."""
+        rec = _make_record(run_id="<script>alert(1)</script>", model="<b>evil</b>")
+        metrics = voicemode_report.compute_report_metrics([rec])
+        html_doc = voicemode_report.render_html_report([rec], metrics)
+
+        self.assertNotIn("<script>alert(1)</script>", html_doc)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html_doc)
+        self.assertNotIn("<b>evil</b>", html_doc)
+        self.assertIn("&lt;b&gt;evil&lt;/b&gt;", html_doc)
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (Plan 08-02): Visual Onboarding Empty State & Privacy Footer Tests
+# ---------------------------------------------------------------------------
+
+class TestEmptyStateAndPrivacy(TempXdgTestCase):
+    """Task 3: Visual onboarding empty state and 4-subpanel privacy footer."""
+
+    def test_empty_state_rendering(self):
+        """RPT-03: Empty ledger renders visual onboarding card, ghost outlines, and shortcut reminder."""
+        records = []
+        metrics = voicemode_report.compute_report_metrics(records)
+        html_doc = voicemode_report.render_html_report(records, metrics)
+
+        self.assertIn("SUPER+SHIFT+M", html_doc)
+        self.assertIn("No recordings yet", html_doc)
+        self.assertIn("ghost-chart", html_doc)
+        self.assertIn("stroke-dasharray", html_doc)
+
+    def test_privacy_footer_subpanels(self):
+        """RPT-03: Privacy footer contains all 4 distinct sub-panels."""
+        records = [_make_record()]
+        metrics = voicemode_report.compute_report_metrics(records)
+        html_doc = voicemode_report.render_html_report(records, metrics)
+
+        self.assertIn("1. Local Storage Location", html_doc)
+        self.assertIn("2. Retained Schema", html_doc)
+        self.assertIn("3. Clipboard Caveat", html_doc)
+        self.assertIn("4. Purge & Reset", html_doc)
+        self.assertIn("voice --reset-calibration", html_doc)
+
+    def test_privacy_footer_warning_on_skipped_rows(self):
+        """D-21: Privacy footer shows warning banner when skipped_count > 0."""
+        records = [_make_record()]
+        metrics = voicemode_report.compute_report_metrics(records)
+        html_doc = voicemode_report.render_html_report(records, metrics, skipped_count=3)
+
+        self.assertIn("⚠️ 3 row(s) skipped due to parse errors", html_doc)
 
 
 if __name__ == "__main__":

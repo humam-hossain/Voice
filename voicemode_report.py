@@ -2,9 +2,10 @@
 
 Provides tolerant JSONL ledger loading, multi-criteria filtering,
 statistics aggregation, terminal summary, canonical CSV export,
-converged JSON output, and secure browser launch.
+converged JSON output, fluid responsive inline SVG charts, zero-JS
+dark HTML dashboard, visual onboarding empty state, and secure browser launch.
 
-Imports: stdlib only + voicemode_telemetry.  Never imports faster_whisper,
+Imports: stdlib only + voicemode_telemetry. Never imports faster_whisper,
 numpy, sounddevice, or jinja2 (FND-01 / RPT-01).
 """
 from __future__ import annotations
@@ -26,12 +27,11 @@ import sys
 import time
 from typing import Any, Optional
 
-
 import voicemode_telemetry
 
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants & Color Palette (Dark Theme / Arch & Hyprland Aesthetic)
 # ---------------------------------------------------------------------------
 
 CSV_HEADERS = [
@@ -39,6 +39,23 @@ CSV_HEADERS = [
     "actual_s", "error_s", "error_pct", "load_s", "record_s", "decode_s",
     "finalize_s", "insert_s", "outcome", "eta_source", "confidence",
 ]
+
+COLOR_BG = "#0f172a"
+COLOR_CARD = "#1e293b"
+COLOR_BORDER = "#334155"
+COLOR_TEXT = "#f8fafc"
+COLOR_MUTED = "#94a3b8"
+
+# 3-tier accuracy color thresholds (D-05)
+COLOR_GREEN = "#22c55e"    # <15% error
+COLOR_AMBER = "#f59e0b"    # 15–30% error
+COLOR_CRIMSON = "#ef4444"  # >30% error or severe overrun
+
+# Stage colors
+COLOR_LOAD = "#6366f1"      # Indigo
+COLOR_DECODE = "#38bdf8"    # Sky
+COLOR_FINALIZE = "#8b5cf6"  # Purple
+COLOR_INSERT = "#10b981"    # Emerald
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +117,6 @@ def parse_since_argument(val: str) -> Optional[float]:
     if not val:
         return None
     val = val.strip()
-    # Relative intervals
     m = re.match(r"^(\d+)([hdwm])$", val, re.IGNORECASE)
     if m:
         amount = int(m.group(1))
@@ -115,7 +131,6 @@ def parse_since_argument(val: str) -> Optional[float]:
         elif unit == "m":
             return now - amount * 60
         return None
-    # ISO 8601
     try:
         dt = datetime.datetime.fromisoformat(val)
         if dt.tzinfo is None:
@@ -135,23 +150,19 @@ def filter_records(
     """Filters records by time window, limit count, and model/device attributes (D-14, D-16)."""
     filtered = list(records)
 
-    # Filter by model
     if model:
         m_lower = model.lower()
         filtered = [r for r in filtered if str(r.get("config", {}).get("model", "")).lower() == m_lower]
 
-    # Filter by device
     if device:
         d_lower = device.lower()
         filtered = [r for r in filtered if str(r.get("config", {}).get("device", "")).lower() == d_lower]
 
-    # Filter by since (ISO date or relative interval like 24h, 7d, 30d)
     if since:
         since_ts = parse_since_argument(since)
         if since_ts is not None:
             filtered = [r for r in filtered if (r.get("ts_start") or r.get("ts_end") or 0.0) >= since_ts]
 
-    # Filter by last count (integer or "all")
     if last is not None and str(last).lower() != "all":
         try:
             limit = int(last)
@@ -174,6 +185,23 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
         return float(v)
     except (ValueError, TypeError):
         return default
+
+
+def extract_run_points(rec: dict) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Extracts (pred_s, act_s, error_pct) from a ledger record."""
+    pred = rec.get("predicted") or {}
+    act = rec.get("actual") or {}
+
+    pred_s = _safe_float(pred.get("shown_s")) if pred.get("shown_s") is not None else None
+    act_s = _safe_float(pred.get("actual_s")) if pred.get("actual_s") is not None else None
+    if act_s is None and act.get("total_ms") is not None:
+        act_s = round(_safe_float(act["total_ms"]) / 1000.0, 3)
+
+    error_pct = None
+    if pred_s is not None and act_s is not None and act_s > 0:
+        error_pct = round(abs(pred_s - act_s) / act_s * 100.0, 1)
+
+    return pred_s, act_s, error_pct
 
 
 def compute_report_metrics(records: list[dict]) -> dict:
@@ -200,31 +228,16 @@ def compute_report_metrics(records: list[dict]) -> dict:
     overrun_count = 0
 
     for r in records:
-        pred = r.get("predicted") or {}
+        pred_s, act_s, err_pct = extract_run_points(r)
+        if pred_s is not None and act_s is not None and act_s > 0:
+            error_pcts.append(err_pct)
+            if pred_s < act_s:
+                overrun_count += 1
+
         act = r.get("actual") or {}
+        if act_s is not None:
+            latencies.append(act_s)
 
-        pred_s = pred.get("shown_s")
-        act_s = pred.get("actual_s")
-        if act_s is None and act.get("total_ms") is not None:
-            act_s = _safe_float(act["total_ms"]) / 1000.0
-
-        if pred_s is not None and act_s is not None:
-            try:
-                p = float(pred_s)
-                a = float(act_s)
-                if a > 0:
-                    err_pct = abs(p - a) / a * 100.0
-                    error_pcts.append(err_pct)
-                    if p < a:
-                        overrun_count += 1
-            except (ValueError, TypeError):
-                pass
-
-        # Total latency
-        if act.get("total_ms") is not None:
-            latencies.append(_safe_float(act["total_ms"]) / 1000.0)
-
-        # Stage latencies
         if act.get("load_ms") is not None:
             load_vals.append(_safe_float(act["load_ms"]) / 1000.0)
         if act.get("decode_ms") is not None:
@@ -237,7 +250,6 @@ def compute_report_metrics(records: list[dict]) -> dict:
     median_error_pct = round(statistics.median(error_pcts), 1) if error_pcts else None
     p90_latency_s = _percentile(latencies, 0.90) if latencies else None
 
-    # Stage medians and p90s
     stage_medians: dict[str, float] = {}
     stage_p90s: dict[str, float] = {}
     for name, vals in [("load", load_vals), ("decode", decode_vals),
@@ -246,7 +258,6 @@ def compute_report_metrics(records: list[dict]) -> dict:
             stage_medians[name] = round(statistics.median(vals), 3)
             stage_p90s[name] = _percentile(vals, 0.90)
 
-    # Calibration tier
     try:
         cal = voicemode_telemetry.load_calibration()
         cal_tier = "prior"
@@ -404,7 +415,6 @@ def render_terminal_summary(
     cal_tier = metrics.get("calibration_tier", "prior")
     overrun = metrics.get("overrun_count", 0)
 
-    # Hero card
     lines.append("╔══════════════════════════════════════════════════╗")
     lines.append("║            Voice Accuracy Report                 ║")
     lines.append("╠══════════════════════════════════════════════════╣")
@@ -426,7 +436,6 @@ def render_terminal_summary(
         lines.append(f"\nReport: {report_path}")
         return "\n".join(lines)
 
-    # Recent runs table (last 10)
     lines.append("")
     header = f"{'RUN_ID':<14} {'DATE/TIME':<20} {'AUDIO':>6} {'PRED':>6} {'ACTUAL':>6} {'ERR%':>6} {'STATUS':<8} {'L/D/F/I'}"
     lines.append(header)
@@ -434,26 +443,15 @@ def render_terminal_summary(
 
     recent = records[-10:]
     for r in recent:
-        pred = r.get("predicted") or {}
-        act = r.get("actual") or {}
-        cfg = r.get("config") or {}
-
         run_id = str(r.get("run_id", ""))[:12]
         ts = r.get("ts_start") or r.get("ts_end") or 0.0
         dt_str = time.strftime("%Y-%m-%d %H:%M", time.gmtime(ts)) if ts else "N/A"
 
         audio_s = _safe_float(r.get("audio_s"))
-        pred_s = _safe_float(pred.get("shown_s")) if pred.get("shown_s") is not None else None
-        act_s = _safe_float(pred.get("actual_s")) if pred.get("actual_s") is not None else None
-        if act_s is None and act.get("total_ms") is not None:
-            act_s = _safe_float(act["total_ms"]) / 1000.0
+        pred_s, act_s, err_pct = extract_run_points(r)
+        err_str = f"{err_pct:.1f}%" if err_pct is not None else "N/A"
 
-        if pred_s is not None and act_s is not None and act_s > 0:
-            err_pct = abs(pred_s - act_s) / act_s * 100.0
-            err_str = f"{err_pct:.1f}%"
-        else:
-            err_str = "N/A"
-
+        act = r.get("actual") or {}
         outcome = r.get("outcome", "?")[:7]
         load_s = _safe_float(act.get("load_ms")) / 1000.0 if act.get("load_ms") is not None else 0.0
         decode_s = _safe_float(act.get("decode_ms")) / 1000.0 if act.get("decode_ms") is not None else 0.0
@@ -474,6 +472,685 @@ def render_terminal_summary(
     lines.append(f"\nReport: {report_path}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Fluid Responsive Inline SVG Charts (D-02, D-03, D-04, D-05)
+# ---------------------------------------------------------------------------
+
+def render_scatter_svg(records: list[dict], metrics: dict) -> str:
+    """Predicted vs Actual scatter plot with 45° diagonal dashed line (D-02, D-03, D-05)."""
+    w, h = 500, 320
+    pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+
+    valid_pts = []
+    for r in records:
+        p, a, err = extract_run_points(r)
+        if p is not None and a is not None and a > 0:
+            valid_pts.append((p, a, err, str(r.get("run_id", ""))))
+
+    max_val = 5.0
+    if valid_pts:
+        max_p = max(p for p, _, _, _ in valid_pts)
+        max_a = max(a for _, a, _, _ in valid_pts)
+        max_val = max(1.0, max(max_p, max_a))
+    max_val = max(1.0, round(max_val * 1.1, 1))
+
+    # Gridlines and axes
+    elements = []
+    for step in (0.25, 0.5, 0.75, 1.0):
+        val = max_val * step
+        x = pad_l + step * plot_w
+        y = pad_t + plot_h - step * plot_h
+        elements.append(f'<line x1="{x:.1f}" y1="{pad_t}" x2="{x:.1f}" y2="{pad_t + plot_h}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.4" />')
+        elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.4" />')
+        elements.append(f'<text x="{x:.1f}" y="{pad_t + plot_h + 16}" fill="{COLOR_MUTED}" font-size="10" text-anchor="middle">{val:.1f}s</text>')
+        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val:.1f}s</text>')
+
+    # 45-degree diagonal line: y = x (Ideal prediction)
+    elements.append(
+        f'<line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{pad_l + plot_w}" y2="{pad_t}" '
+        f'stroke="#475569" stroke-dasharray="4,4" stroke-width="1.5">'
+        f'<title>Ideal Prediction (1:1 diagonal)</title></line>'
+    )
+
+    # Data points
+    for p, a, err, rid in valid_pts:
+        cx = pad_l + (min(a, max_val) / max_val) * plot_w
+        cy = pad_t + plot_h - (min(p, max_val) / max_val) * plot_h
+        color = COLOR_GREEN if err < 15.0 else (COLOR_AMBER if err <= 30.0 else COLOR_CRIMSON)
+        elements.append(
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{color}" opacity="0.85" class="chart-dot">'
+            f'<title>Run {html.escape(rid)}: Pred {p:.2f}s, Actual {a:.2f}s ({err:.1f}% error)</title>'
+            f'</circle>'
+        )
+
+    # Axis titles
+    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Actual Latency (s)</text>')
+    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Predicted (s)</text>')
+
+    return (
+        f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'style="width: 100%; height: auto; max-width: 100%; display: block;">'
+        f'{"".join(elements)}'
+        f'</svg>'
+    )
+
+
+def render_trend_svg(records: list[dict], metrics: dict) -> str:
+    """Error % Over Time trend curve with 15% and 30% reference lines (D-02, D-05)."""
+    w, h = 500, 320
+    pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+
+    pts = []
+    for i, r in enumerate(records):
+        _, _, err = extract_run_points(r)
+        if err is not None:
+            pts.append((str(r.get("run_id", f"run-{i}")), err))
+
+    max_err = 50.0
+    if pts:
+        max_e = max(err for _, err in pts)
+        max_err = max(50.0, max_e * 1.1)
+    max_err = min(200.0, max_err)
+
+    elements = []
+    # Gridlines
+    for step in (0.25, 0.5, 0.75, 1.0):
+        val = max_err * step
+        y = pad_t + plot_h - step * plot_h
+        elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.3" />')
+        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val:.0f}%</text>')
+
+    # 15% and 30% tolerance threshold lines
+    y_15 = pad_t + plot_h - (15.0 / max_err) * plot_h
+    elements.append(
+        f'<line x1="{pad_l}" y1="{y_15:.1f}" x2="{pad_l + plot_w}" y2="{y_15:.1f}" '
+        f'stroke="{COLOR_GREEN}" stroke-dasharray="3,3" opacity="0.7">'
+        f'<title>15% Tolerance Threshold</title></line>'
+        f'<text x="{pad_l + plot_w - 4}" y="{y_15 - 4:.1f}" fill="{COLOR_GREEN}" font-size="10" text-anchor="end">15%</text>'
+    )
+
+    y_30 = pad_t + plot_h - (30.0 / max_err) * plot_h
+    elements.append(
+        f'<line x1="{pad_l}" y1="{y_30:.1f}" x2="{pad_l + plot_w}" y2="{y_30:.1f}" '
+        f'stroke="{COLOR_AMBER}" stroke-dasharray="3,3" opacity="0.7">'
+        f'<title>30% Warning Threshold</title></line>'
+        f'<text x="{pad_l + plot_w - 4}" y="{y_30 - 4:.1f}" fill="{COLOR_AMBER}" font-size="10" text-anchor="end">30%</text>'
+    )
+
+    # Polyline and data points
+    if pts:
+        coords = []
+        dots = []
+        n = len(pts)
+        for i, (rid, err) in enumerate(pts):
+            cx = pad_l + (plot_w / 2 if n == 1 else (i / (n - 1)) * plot_w)
+            cy = pad_t + plot_h - (min(err, max_err) / max_err) * plot_h
+            coords.append(f"{cx:.1f},{cy:.1f}")
+            color = COLOR_GREEN if err < 15.0 else (COLOR_AMBER if err <= 30.0 else COLOR_CRIMSON)
+            dots.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{color}" class="chart-dot">'
+                f'<title>Run {html.escape(rid)}: Error {err:.1f}%</title>'
+                f'</circle>'
+            )
+
+        elements.append(f'<polyline points="{" ".join(coords)}" fill="none" stroke="#38bdf8" stroke-width="2" />')
+        elements.extend(dots)
+
+    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Chronological Runs</text>')
+    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Error %</text>')
+
+    return (
+        f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'style="width: 100%; height: auto; max-width: 100%; display: block;">'
+        f'{"".join(elements)}'
+        f'</svg>'
+    )
+
+
+def render_histogram_svg(records: list[dict], metrics: dict) -> str:
+    """Residual error |pred - actual| histogram across 8 bins (D-02, D-05)."""
+    w, h = 500, 320
+    pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+
+    bin_edges = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, float("inf")]
+    bin_labels = ["0-0.25s", "0.25-0.5s", "0.5-0.75s", "0.75-1s", "1-1.5s", "1.5-2s", "2-3s", ">3s"]
+    counts = [0] * len(bin_edges)
+
+    for r in records:
+        p, a, _ = extract_run_points(r)
+        if p is not None and a is not None:
+            residual = abs(p - a)
+            for idx, edge in enumerate(bin_edges):
+                if residual <= edge:
+                    counts[idx] += 1
+                    break
+
+    max_c = max(1, max(counts))
+    total_valid = sum(counts)
+    elements = []
+
+    # Y-axis ticks
+    for step in (0.5, 1.0):
+        val = int(max_c * step)
+        y = pad_t + plot_h - step * plot_h
+        elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.3" />')
+        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val}</text>')
+
+    bar_gap = 6
+    num_bins = len(bin_labels)
+    bar_w = (plot_w - (num_bins + 1) * bar_gap) / num_bins
+
+    for idx, (label, count) in enumerate(zip(bin_labels, counts)):
+        bx = pad_l + bar_gap + idx * (bar_w + bar_gap)
+        bar_h = (count / max_c) * plot_h
+        by = pad_t + plot_h - bar_h
+
+        # 3-tier colors for residual magnitudes
+        if idx < 2:
+            color = COLOR_GREEN
+        elif idx < 4:
+            color = COLOR_AMBER
+        else:
+            color = COLOR_CRIMSON
+
+        pct = (count / total_valid * 100.0) if total_valid > 0 else 0.0
+        elements.append(
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" fill="{color}" rx="3" opacity="0.85">'
+            f'<title>Bin {label}: {count} runs ({pct:.1f}%)</title>'
+            f'</rect>'
+        )
+        elements.append(
+            f'<text x="{bx + bar_w / 2:.1f}" y="{pad_t + plot_h + 14}" fill="{COLOR_MUTED}" font-size="9" text-anchor="middle">{label}</text>'
+        )
+
+    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Residual Magnitude |Pred - Actual|</text>')
+    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Runs</text>')
+
+    return (
+        f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'style="width: 100%; height: auto; max-width: 100%; display: block;">'
+        f'{"".join(elements)}'
+        f'</svg>'
+    )
+
+
+def render_stage_bars_svg(records: list[dict], metrics: dict) -> str:
+    """Stacked bars decomposing latency into Load, Decode, Finalize, Insert stages."""
+    w, h = 500, 320
+    pad_l, pad_b, pad_t, pad_r = 75, 50, 30, 20
+    plot_w = w - pad_l - pad_r
+    plot_h = h - pad_t - pad_b
+
+    recent = records[-7:] if records else []
+    elements = []
+
+    # Legend at top
+    legend_items = [
+        ("Load", COLOR_LOAD),
+        ("Decode", COLOR_DECODE),
+        ("Finalize", COLOR_FINALIZE),
+        ("Insert", COLOR_INSERT),
+    ]
+    lx = pad_l
+    for label, col in legend_items:
+        elements.append(f'<rect x="{lx}" y="8" width="10" height="10" fill="{col}" rx="2" />')
+        elements.append(f'<text x="{lx + 14}" y="17" fill="{COLOR_MUTED}" font-size="10">{label}</text>')
+        lx += 75
+
+    if not recent:
+        elements.append(f'<text x="{w / 2}" y="{h / 2}" fill="{COLOR_MUTED}" font-size="12" text-anchor="middle">No stage data available</text>')
+        return f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" style="width: 100%; height: auto; max-width: 100%; display: block;">{"".join(elements)}</svg>'
+
+    # Find max total latency among recent runs
+    max_tot = 1.0
+    for r in recent:
+        act = r.get("actual") or {}
+        tot = _safe_float(act.get("total_ms")) / 1000.0
+        if tot > max_tot:
+            max_tot = tot
+    max_tot = max(1.0, round(max_tot * 1.1, 1))
+
+    row_h = min(22.0, (plot_h - 10) / len(recent))
+    for i, r in enumerate(recent):
+        ry = pad_t + 10 + i * row_h
+        act = r.get("actual") or {}
+        run_id = str(r.get("run_id", f"run-{i}"))[:8]
+
+        l_s = _safe_float(act.get("load_ms")) / 1000.0
+        d_s = _safe_float(act.get("decode_ms")) / 1000.0
+        f_s = _safe_float(act.get("finalize_ms")) / 1000.0
+        i_s = _safe_float(act.get("insert_ms")) / 1000.0
+        tot_s = l_s + d_s + f_s + i_s
+
+        elements.append(f'<text x="{pad_l - 8}" y="{ry + row_h * 0.75:.1f}" fill="{COLOR_MUTED}" font-size="9" text-anchor="end">{html.escape(run_id)}</text>')
+
+        cur_x = pad_l
+        for duration, color, name in [
+            (l_s, COLOR_LOAD, "Load"),
+            (d_s, COLOR_DECODE, "Decode"),
+            (f_s, COLOR_FINALIZE, "Finalize"),
+            (i_s, COLOR_INSERT, "Insert"),
+        ]:
+            if duration > 0:
+                seg_w = (duration / max_tot) * plot_w
+                pct = (duration / tot_s * 100.0) if tot_s > 0 else 0.0
+                elements.append(
+                    f'<rect x="{cur_x:.1f}" y="{ry:.1f}" width="{seg_w:.1f}" height="{row_h - 4:.1f}" fill="{color}">'
+                    f'<title>{name}: {duration:.2f}s ({pct:.0f}%)</title>'
+                    f'</rect>'
+                )
+                cur_x += seg_w
+
+        elements.append(f'<text x="{cur_x + 4:.1f}" y="{ry + row_h * 0.75:.1f}" fill="{COLOR_MUTED}" font-size="9">{tot_s:.2f}s</text>')
+
+    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 10}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Stage Duration (s)</text>')
+
+    return (
+        f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
+        f'style="width: 100%; height: auto; max-width: 100%; display: block;">'
+        f'{"".join(elements)}'
+        f'</svg>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Visual Onboarding Empty State & Ghost Charts (D-08, RPT-03)
+# ---------------------------------------------------------------------------
+
+def render_ghost_charts_svg() -> str:
+    """Renders dashed ghost chart outlines for visual onboarding (D-08, RPT-03)."""
+    return (
+        '<div class="ghost-grid">'
+        '<div class="ghost-chart">'
+        '<svg viewBox="0 0 500 240" style="width:100%;height:auto;display:block;">'
+        '<rect x="20" y="20" width="460" height="200" fill="none" stroke="#334155" stroke-dasharray="6,6" rx="8" />'
+        '<line x1="60" y1="180" x2="440" y2="60" stroke="#334155" stroke-dasharray="4,4" opacity="0.5" />'
+        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Predicted vs Actual Latency</text>'
+        '<text x="250" y="140" fill="#475569" font-size="12" text-anchor="middle">Populates after your first dictation</text>'
+        '</svg>'
+        '</div>'
+        '<div class="ghost-chart">'
+        '<svg viewBox="0 0 500 240" style="width:100%;height:auto;display:block;">'
+        '<rect x="20" y="20" width="460" height="200" fill="none" stroke="#334155" stroke-dasharray="6,6" rx="8" />'
+        '<line x1="60" y1="140" x2="440" y2="140" stroke="#334155" stroke-dasharray="4,4" opacity="0.5" />'
+        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Error % Over Time</text>'
+        '<text x="250" y="140" fill="#475569" font-size="12" text-anchor="middle">Tracks calibration convergence</text>'
+        '</svg>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_empty_state_card() -> str:
+    """Visual onboarding card explaining calibration and prompting shortcut (D-08)."""
+    ghost = render_ghost_charts_svg()
+    return f"""
+    <div class="empty-state">
+      <div class="onboarding-card">
+        <h2>No recordings yet</h2>
+        <p class="onboarding-desc">
+          Voicemode predicts transcription latency locally using online calibration.
+          As you speak, predictions adapt to your hardware across 3 confidence tiers:
+          <strong>Prior &rarr; L0 (audio duration) &rarr; L1 (device) &rarr; L2 (model & compute type)</strong>.
+        </p>
+        <div class="shortcut-box">
+          Press <kbd>SUPER+SHIFT+M</kbd> to record your first dictation
+        </div>
+      </div>
+      {ghost}
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Privacy Footer (D-07, RPT-03)
+# ---------------------------------------------------------------------------
+
+def render_privacy_footer(metrics_path: Optional[Path] = None, skipped_count: int = 0) -> str:
+    """Renders structured 4-subpanel privacy card with explicit purge commands (D-07)."""
+    if metrics_path is None:
+        metrics_path = voicemode_telemetry.get_ledger_path()
+    path_str = html.escape(str(metrics_path))
+
+    warning_html = ""
+    if skipped_count > 0:
+        warning_html = (
+            f'<div class="corrupt-warning">'
+            f'⚠️ {skipped_count} row(s) skipped due to parse errors.'
+            f'</div>'
+        )
+
+    return f"""
+    <div class="privacy-card">
+      <div class="privacy-header">
+        <h3>Privacy & Telemetry Baseline</h3>
+        <span class="privacy-badge">Local Only • Zero Network</span>
+      </div>
+      <div class="privacy-grid">
+        <div class="privacy-subpanel">
+          <h4>1. Local Storage Location</h4>
+          <code>{path_str}</code>
+          <p>Data is stored locally on this machine. Never synced or transmitted anywhere.</p>
+        </div>
+        <div class="privacy-subpanel">
+          <h4>2. Retained Schema</h4>
+          <p>Only timings, stage latencies, model parameters, and character counts are stored. Audio buffers, prompts, hotwords, and transcript text are never recorded.</p>
+        </div>
+        <div class="privacy-subpanel">
+          <h4>3. Clipboard Caveat</h4>
+          <p>Transcript insertion simulates native Wayland keystrokes or uses system clipboard paste. Active clipboard text is never logged or stored in telemetry.</p>
+        </div>
+        <div class="privacy-subpanel">
+          <h4>4. Purge & Reset</h4>
+          <p>To purge all history:</p>
+          <code>rm {path_str}</code>
+          <p style="margin-top:8px;">To reset calibration to priors:</p>
+          <code>voice --reset-calibration</code>
+        </div>
+      </div>
+      {warning_html}
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Recent Runs Table (D-06, D-05)
+# ---------------------------------------------------------------------------
+
+def render_runs_table(records: list[dict]) -> str:
+    """Renders recent runs table (up to 200, 25 visible, CSS scrollable) with 3-tier badges."""
+    if not records:
+        return '<div class="table-empty">No runs recorded yet. Dictate your first sentence to populate this ledger.</div>'
+
+    rows_html = []
+    for r in reversed(records[-200:]):
+        run_id = html.escape(str(r.get("run_id", ""))[:12])
+        ts = r.get("ts_start") or r.get("ts_end") or 0.0
+        dt_str = time.strftime("%Y-%m-%d %H:%M", time.gmtime(ts)) if ts else "N/A"
+
+        cfg = r.get("config") or {}
+        model = html.escape(str(cfg.get("model", "unknown")))
+        audio_s = _safe_float(r.get("audio_s"))
+
+        pred_s, act_s, err_pct = extract_run_points(r)
+        if err_pct is not None:
+            if err_pct < 15.0:
+                badge_cls = "badge-green"
+            elif err_pct <= 30.0:
+                badge_cls = "badge-amber"
+            else:
+                badge_cls = "badge-crimson"
+            err_badge = f'<span class="badge {badge_cls}">{err_pct:.1f}%</span>'
+        else:
+            err_badge = '<span class="badge badge-muted">N/A</span>'
+
+        outcome = html.escape(str(r.get("outcome", "unknown")))
+        act = r.get("actual") or {}
+        load_s = _safe_float(act.get("load_ms")) / 1000.0 if act.get("load_ms") is not None else 0.0
+        decode_s = _safe_float(act.get("decode_ms")) / 1000.0 if act.get("decode_ms") is not None else 0.0
+        fin_s = _safe_float(act.get("finalize_ms")) / 1000.0 if act.get("finalize_ms") is not None else 0.0
+        ins_s = _safe_float(act.get("insert_ms")) / 1000.0 if act.get("insert_ms") is not None else 0.0
+
+        p_str = f"{pred_s:.2f}s" if pred_s is not None else "-"
+        a_str = f"{act_s:.2f}s" if act_s is not None else "-"
+
+        rows_html.append(
+            f'<tr>'
+            f'<td><code>{run_id}</code></td>'
+            f'<td>{dt_str}</td>'
+            f'<td>{model}</td>'
+            f'<td>{audio_s:.1f}s</td>'
+            f'<td>{p_str}</td>'
+            f'<td>{a_str}</td>'
+            f'<td>{err_badge}</td>'
+            f'<td><small>{load_s:.2f}/{decode_s:.2f}/{fin_s:.2f}/{ins_s:.2f}</small></td>'
+            f'<td>{outcome}</td>'
+            f'</tr>'
+        )
+
+    return f"""
+    <div class="runs-table-container">
+      <table class="runs-table">
+        <thead>
+          <tr>
+            <th>Run ID</th>
+            <th>Date/Time</th>
+            <th>Model</th>
+            <th>Audio</th>
+            <th>Predicted</th>
+            <th>Actual</th>
+            <th>Error%</th>
+            <th>Stages (L/D/F/I)</th>
+            <th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(rows_html)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
+# Standalone HTML Document Generator (D-01, D-02, D-03, RPT-02)
+# ---------------------------------------------------------------------------
+
+CSS_STYLES = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 24px;
+  line-height: 1.5;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #334155;
+}
+.header h1 { font-size: 1.5rem; font-weight: 700; color: #f8fafc; }
+.header .tagline { font-size: 0.875rem; color: #94a3b8; }
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+.hero-card .label { font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em; }
+.hero-card .value { font-size: 1.75rem; font-weight: 700; margin-top: 4px; color: #f8fafc; }
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.chart-card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; color: #cbd5e1; }
+.chart-dot:hover { r: 6; stroke: #ffffff; stroke-width: 1.5; opacity: 1; }
+.runs-table-container {
+  max-height: 700px;
+  overflow-y: auto;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #1e293b;
+  margin-bottom: 24px;
+}
+.runs-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.runs-table th {
+  position: sticky;
+  top: 0;
+  background: #1e293b;
+  color: #94a3b8;
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid #334155;
+  font-weight: 600;
+}
+.runs-table td { padding: 8px 14px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+.runs-table tr:hover td { background: rgba(51, 65, 85, 0.4); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 0.75rem; }
+.badge-green { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.badge-amber { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.badge-crimson { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.badge-muted { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.privacy-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 32px;
+}
+.privacy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.privacy-header h3 { font-size: 1rem; color: #f8fafc; }
+.privacy-badge { background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
+.privacy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.privacy-subpanel h4 { font-size: 0.85rem; color: #e2e8f0; margin-bottom: 6px; }
+.privacy-subpanel p { font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
+.privacy-subpanel code { font-size: 0.75rem; background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #cbd5e1; word-break: break-all; }
+.corrupt-warning { margin-top: 16px; padding: 8px 12px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border-radius: 6px; font-size: 0.8rem; }
+.empty-state { text-align: center; margin: 32px 0; }
+.onboarding-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 32px; max-width: 680px; margin: 0 auto 32px; }
+.onboarding-card h2 { font-size: 1.4rem; margin-bottom: 12px; color: #f8fafc; }
+.onboarding-desc { color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.6; }
+.shortcut-box { display: inline-block; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px 18px; font-size: 0.9rem; color: #38bdf8; }
+.shortcut-box kbd { background: #334155; color: #f8fafc; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; }
+.ghost-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 20px; margin-top: 24px; }
+.ghost-chart { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+.table-empty { text-align: center; padding: 32px; color: #94a3b8; font-size: 0.9rem; }
+"""
+
+
+def render_html_report(
+    records: list[dict],
+    metrics: dict,
+    skipped_count: int = 0,
+    metrics_path: Optional[Path] = None,
+) -> str:
+    """Generates the self-contained, zero-JavaScript dark HTML dashboard (D-01, D-02, D-03, RPT-02)."""
+    total = metrics.get("total_runs", 0)
+    med_err = metrics.get("median_error_pct")
+    p90 = metrics.get("p90_latency_s")
+    cal_tier = metrics.get("calibration_tier", "prior")
+
+    med_str = f"{med_err:.1f}%" if med_err is not None else "N/A"
+    p90_str = f"{p90:.2f}s" if p90 is not None else "N/A"
+
+    hero_cards_html = f"""
+    <div class="hero-grid">
+      <div class="card hero-card">
+        <div class="label">Total Runs</div>
+        <div class="value">{total}</div>
+      </div>
+      <div class="card hero-card">
+        <div class="label">Median Error</div>
+        <div class="value">{med_str}</div>
+      </div>
+      <div class="card hero-card">
+        <div class="label">P90 Latency</div>
+        <div class="value">{p90_str}</div>
+      </div>
+      <div class="card hero-card">
+        <div class="label">Calibration Tier</div>
+        <div class="value">{html.escape(cal_tier)}</div>
+      </div>
+    </div>
+    """
+
+    if total == 0:
+        main_content = render_empty_state_card()
+    else:
+        scatter_svg = render_scatter_svg(records, metrics)
+        trend_svg = render_trend_svg(records, metrics)
+        hist_svg = render_histogram_svg(records, metrics)
+        stage_svg = render_stage_bars_svg(records, metrics)
+
+        charts_html = f"""
+        <div class="chart-grid">
+          <div class="card chart-card">
+            <h3>Predicted vs Actual Latency (1:1 Diagonal)</h3>
+            {scatter_svg}
+          </div>
+          <div class="card chart-card">
+            <h3>Error % Over Time (Tolerance Thresholds)</h3>
+            {trend_svg}
+          </div>
+          <div class="card chart-card">
+            <h3>Residual Error Distribution |Pred - Actual|</h3>
+            {hist_svg}
+          </div>
+          <div class="card chart-card">
+            <h3>Stage Timing Breakdown (Load / Decode / Finalize / Insert)</h3>
+            {stage_svg}
+          </div>
+        </div>
+        """
+        table_html = render_runs_table(records)
+        main_content = f"{charts_html}\n{table_html}"
+
+    privacy_html = render_privacy_footer(metrics_path=metrics_path, skipped_count=skipped_count)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voicemode Accuracy Report</title>
+  <style>
+{CSS_STYLES}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>Voicemode Accuracy Report</h1>
+      <div class="tagline">Local Telemetry & Calibration Dashboard • Arch Linux / Hyprland</div>
+    </div>
+  </div>
+  {hero_cards_html}
+  {main_content}
+  {privacy_html}
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Pre-Render Hook (D-18, D-19, D-20)
+# ---------------------------------------------------------------------------
+
+def generate_prerendered_report(dest_path: Optional[Path] = None) -> Path:
+    """Pre-renders report.html for the last 200 runs and atomically writes to disk (D-18, D-19)."""
+    if dest_path is None:
+        dest_path = voicemode_telemetry.get_state_dir() / "report.html"
+
+    records, skipped_count = load_ledger_records(max_records=200)
+    metrics = compute_report_metrics(records)
+    html_content = render_html_report(
+        records=records,
+        metrics=metrics,
+        skipped_count=skipped_count,
+        metrics_path=voicemode_telemetry.get_ledger_path(),
+    )
+
+    voicemode_telemetry.atomic_write_text(dest_path, html_content, mode=0o600)
+    return dest_path
 
 
 # ---------------------------------------------------------------------------
@@ -532,52 +1209,6 @@ def open_report_file(path: Path, args: Optional[argparse.Namespace] = None) -> b
 
 
 # ---------------------------------------------------------------------------
-# Pre-Render Hook (D-18, D-19, D-20)
-# ---------------------------------------------------------------------------
-
-def generate_prerendered_report(dest_path: Optional[Path] = None) -> Path:
-    """Pre-renders report.html for the last 200 runs and atomically writes to disk (D-18, D-19)."""
-    if dest_path is None:
-        dest_path = voicemode_telemetry.get_state_dir() / "report.html"
-
-    records, skipped_count = load_ledger_records(max_records=200)
-    metrics = compute_report_metrics(records)
-
-    # Minimal HTML stub for now (Phase 08-02 will add full SVG charts)
-    html_content = _render_html_stub(records, metrics, skipped_count)
-
-    voicemode_telemetry.atomic_write_text(dest_path, html_content, mode=0o600)
-    return dest_path
-
-
-def _render_html_stub(records: list[dict], metrics: dict, skipped_count: int = 0) -> str:
-    """Minimal HTML report skeleton (full SVG charts added in plan 08-02)."""
-    total = metrics.get("total_runs", 0)
-    med_err = metrics.get("median_error_pct")
-    p90 = metrics.get("p90_latency_s")
-    cal_tier = metrics.get("calibration_tier", "prior")
-    med_str = f"{med_err:.1f}%" if med_err is not None else "N/A"
-    p90_str = f"{p90:.3f}s" if p90 is not None else "N/A"
-    metrics_path = html.escape(str(voicemode_telemetry.get_ledger_path()))
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Voice Accuracy Report</title></head>
-<body style="background:#0f172a;color:#f8fafc;font-family:system-ui,sans-serif;padding:2rem;">
-<h1>Voice Accuracy Report</h1>
-<p>Total Runs: {total} | Median Error: {med_str} | P90 Latency: {p90_str} | Calibration: {html.escape(cal_tier)}</p>
-{_render_skipped_warning(skipped_count)}
-<div class="privacy-card"><p>Ledger: <code>{metrics_path}</code></p></div>
-</body></html>"""
-
-
-def _render_skipped_warning(skipped_count: int) -> str:
-    if skipped_count > 0:
-        return f'<p style="color:#f59e0b;">⚠️ {skipped_count} row(s) skipped due to parse errors.</p>'
-    return ""
-
-
-# ---------------------------------------------------------------------------
 # CLI Command Handlers
 # ---------------------------------------------------------------------------
 
@@ -601,7 +1232,6 @@ def handle_report_command(args: argparse.Namespace) -> int:
     try:
         records, skipped_count = load_ledger_records()
 
-        # Apply filters
         since = getattr(args, "since", None)
         last = getattr(args, "last", None)
         if last is None:
@@ -621,7 +1251,7 @@ def handle_report_command(args: argparse.Namespace) -> int:
             ledger_info = _get_ledger_info()
             content = render_json(metrics, ledger_info)
         elif fmt == "html":
-            content = _render_html_stub(filtered, metrics, skipped_count)
+            content = render_html_report(filtered, metrics, skipped_count)
         else:
             content = render_terminal_summary(filtered, metrics, skipped_count)
 
@@ -633,9 +1263,8 @@ def handle_report_command(args: argparse.Namespace) -> int:
         else:
             print(content, flush=True)
 
-        # --open flag
         if getattr(args, "open", False):
-            if output_path:
+            if output_path and fmt == "html":
                 open_report_file(Path(output_path), args)
             else:
                 report_path = voicemode_telemetry.get_state_dir() / "report.html"
@@ -661,7 +1290,6 @@ def handle_metrics_command(args: argparse.Namespace) -> int:
             content = render_json(metrics, ledger_info)
             print(content, flush=True)
         else:
-            # Quick text summary
             health = voicemode_telemetry.ledger_health()
             records, skipped = load_ledger_records()
             metrics = compute_report_metrics(records)
