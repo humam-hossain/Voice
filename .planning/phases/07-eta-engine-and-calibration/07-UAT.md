@@ -6,8 +6,8 @@ source:
   - 07-02-SUMMARY.md
   - 07-03-SUMMARY.md
   - 07-04-SUMMARY.md
-started: 2026-10-29T05:52:00Z
-updated: 2026-10-29T08:05:00Z
+started: 2026-10-29T08:10:30Z
+updated: 2026-10-29T09:16:00Z
 ---
 
 ## Current Test
@@ -46,7 +46,6 @@ expected: |
   2. During active parallel chunk recording, dual clocks X:XX | X:XX display recording time and transcribed audio duration.
   3. The transcribed text types directly into your focused window.
 result: pass
-resolved_by: 07-04-PLAN.md
 
 ## Summary
 
@@ -56,10 +55,17 @@ issues: 0
 pending: 0
 skipped: 0
 
+## Deferred Follow-Ups
+
+- phase_target: "09"
+  topic: "VoicePill Dual Timer Colors & State UI Enhancements"
+  ideas:
+    - "Keep existing theme colors (Sage/Cyber Green default)"
+    - "When recording stops: stop left clock (freeze at total recorded duration), continue right clock (transcribed duration catch-up) until finished, then transition to typing without squiggly wave art"
+    - "Add distinct transcribing icon (e.g. neurology, sync, or hourglass) and typing icon (keyboard)"
+    - "Explicit 'Typing...' label and lingering 'Cancelled' state on cancel"
+  deferred_at: 2026-10-29
+
 ## Gaps
 
-- gap_id: G-07-7
-  truth: "Voice status pill reflects live transcription progress and dual-timer/ETA display during recording and transcribing states rather than only showing a static timer or Transcribing label"
-  status: resolved
-  resolution: "Plan 07-04 added transcribed_audio_s to STATUS_V1_KEYS, published cumulative decoded duration from worker_consumer during recording, connected Quickshell Voice.qml to status.json, and updated VoicePill.qml displayText for dual clocks X:XX | X:XX and live ETA countdown"
-  test: 7
+[none yet]
