@@ -413,3 +413,27 @@ class TestStatusContract(TempXdgTestCase):
         j = json.dumps(s)
         parsed = json.loads(j)
         self.assertAlmostEqual(parsed['transcribed_audio_s'], 12.345, places=3)
+
+    def test_print_status_exposes_transcribed_audio_s(self):
+        """print_status(args) with --json outputs transcribed_audio_s."""
+        from io import StringIO
+        import sys
+        voice.write_pid_state(5432, "recording")
+        with patch('voice.process_alive', return_value=True), \
+             patch('voice.read_pid', return_value=5432), \
+             patch('voice.read_pid_state', return_value=(5432, "recording")):
+            voicemode_telemetry.publish_status(voicemode_telemetry.build_status(
+                pid=5432, run_id='run_trans', state='recording', phase='capture',
+                started_at=1.0, transcribed_audio_s=8.75
+            ))
+            args = voice.parse_args(['--status', '--json'])
+            f = StringIO()
+            old = sys.stdout
+            try:
+                sys.stdout = f
+                voice.print_status(args)
+            finally:
+                sys.stdout = old
+            out = json.loads(f.getvalue().strip())
+            self.assertEqual(out.get('transcribed_audio_s'), 8.75)
+            self.assertEqual(out.get('state'), 'recording')
