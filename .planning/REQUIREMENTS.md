@@ -59,12 +59,12 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Reporting (RPT)
 
-- [ ] **RPT-01**: `--report` produces terminal, CSV, and HTML output, with since/last filters, output path, and open; it never imports Whisper.
-- [ ] **RPT-02**: Self-contained HTML with inline SVG and no JS or network: predicted vs actual, error % over time, stage bars, residual histogram.
-- [ ] **RPT-03**: Empty state plus a privacy footer (schema, what is stored, path, deletion, clipboard caveat).
-- [ ] **RPT-04**: `report.html` (last 200 runs) is regenerated atomically when the ledger changes at worker finish, so the click is instant.
-- [ ] **RPT-05**: `--metrics --json` plus CSV export with stable headers.
-- [ ] **RPT-06**: `xdg-open` uses argument lists, validates the path under the state directory, and falls back to a notification plus printed path.
+- [x] **RPT-01**: `--report` produces terminal, CSV, and HTML output, with since/last filters, output path, and open; it never imports Whisper.
+- [x] **RPT-02**: Self-contained HTML with inline SVG and no JS or network: predicted vs actual, error % over time, stage bars, residual histogram.
+- [x] **RPT-03**: Empty state plus a privacy footer (schema, what is stored, path, deletion, clipboard caveat).
+- [x] **RPT-04**: `report.html` (last 200 runs) is regenerated atomically when the ledger changes at worker finish, so the click is instant.
+- [x] **RPT-05**: `--metrics --json` plus CSV export with stable headers.
+- [x] **RPT-06**: `xdg-open` uses argument lists, validates the path under the state directory, and falls back to a notification plus printed path.
 
 ### Quickshell Integration (UI)
 
@@ -167,12 +167,12 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | ETA-07 | 7 | Complete |
 | ETA-08 | 7 | Complete |
 | ETA-09 | 7 | Complete |
-| RPT-01 | 8 | Pending |
-| RPT-02 | 8 | Pending |
-| RPT-03 | 8 | Pending |
-| RPT-04 | 8 | Pending |
-| RPT-05 | 8 | Pending |
-| RPT-06 | 8 | Pending |
+| RPT-01 | 8 | Complete |
+| RPT-02 | 8 | Complete |
+| RPT-03 | 8 | Complete |
+| RPT-04 | 8 | Complete |
+| RPT-05 | 8 | Complete |
+| RPT-06 | 8 | Complete |
 | UI-01 | 9 | Pending |
 | UI-02 | 9 | Pending |
 | UI-03 | 9 | Pending |
