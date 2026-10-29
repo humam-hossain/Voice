@@ -1,12 +1,13 @@
 ---
-status: diagnosed
+status: complete
 phase: 07-eta-engine-and-calibration
 source:
   - 07-01-SUMMARY.md
   - 07-02-SUMMARY.md
   - 07-03-SUMMARY.md
+  - 07-04-SUMMARY.md
 started: 2026-10-29T05:52:00Z
-updated: 2026-10-29T07:19:00Z
+updated: 2026-10-29T08:05:00Z
 ---
 
 ## Current Test
@@ -39,29 +40,19 @@ result: pass
 expected: Setting VOICE_ETA=off suppresses ETA calculations across all telemetry queries, returning None for all ETA fields in status and telemetry.
 result: pass
 
-### 7. Live Push-to-Talk Dictation with Visible ETA
+### 7. Live Push-to-Talk Dictation with Visible ETA & Dual Timer
 expected: |
-  Step-by-step test instructions:
-  1. Focus an open text editor, scratchpad, or terminal where text can be typed.
-  2. Start dictation:
-     - Press your configured Hyprland push-to-talk hotkey, OR run in another terminal: `python voice.py --toggle`
-  3. Speak a test sentence for 3-5 seconds (e.g., "The quick brown fox jumps over the lazy dog").
-  4. Stop dictation (release the hotkey, or run `python voice.py --toggle` again).
-
-  Observable behavior to confirm:
-  1. The status overlay / pill appears immediately upon entering transcription with a single integer countdown (e.g., "~2s", "1s").
-  2. No negative numbers, zero seconds, or ranges are shown.
-  3. If transcription overruns the estimate, it dwells at "1s" for exactly 1.0 second before transitioning to "Finishing…".
-  4. The transcribed text types directly into your focused window.
-result: issue
-reported: "there is no status overlay or PILO nothing appears, like everything is just like before so that is the issue, like what i wanted was that as i am recording the audio for each chunk of audio there is supposed to be converted in parallel so when it is getting converted there should be another time clock that will show that ok this is how much seconds have been already confirmed convert it to text add that to the time, this is the total time that has been added, currently I am seeing the previous recording my audio is the timer not the other things like the other one so that's how I want to do it. like X:XX | X:XX (first one for showing audio recording | second one for how much audio has been transcribed to text)"
-severity: major
+  1. The status overlay / pill appears immediately upon entering transcription with a single integer countdown (e.g., "~2s", "1s") or "Finishing…" on overrun.
+  2. During active parallel chunk recording, dual clocks X:XX | X:XX display recording time and transcribed audio duration.
+  3. The transcribed text types directly into your focused window.
+result: pass
+resolved_by: 07-04-PLAN.md
 
 ## Summary
 
 total: 7
-passed: 6
-issues: 1
+passed: 7
+issues: 0
 pending: 0
 skipped: 0
 
@@ -69,22 +60,6 @@ skipped: 0
 
 - gap_id: G-07-7
   truth: "Voice status pill reflects live transcription progress and dual-timer/ETA display during recording and transcribing states rather than only showing a static timer or Transcribing label"
-  status: failed
-  reason: "User reported: there is no status overlay or PILO nothing appears, like everything is just like before so that is the issue, like what i wanted was that as i am recording the audio for each chunk of audio there is supposed to be converted in parallel so when it is getting converted there should be another time clock that will show that ok this is how much seconds have been already confirmed convert it to text add that to the time, this is the total time that has been added, currently I am seeing the previous recording my audio is the timer not the other things like the other one so that's how I want to do it. like X:XX | X:XX (first one for showing audio recording | second one for how much audio has been transcribed to text)"
-  severity: major
+  status: resolved
+  resolution: "Plan 07-04 added transcribed_audio_s to STATUS_V1_KEYS, published cumulative decoded duration from worker_consumer during recording, connected Quickshell Voice.qml to status.json, and updated VoicePill.qml displayText for dual clocks X:XX | X:XX and live ETA countdown"
   test: 7
-  root_cause: "Status contract and worker do not publish parallel chunk transcribed_audio_s to status.json during recording, and Quickshell Voice.qml/VoicePill.qml only monitors recorder.pid without reading status.json or rendering dual-timers X:XX | X:XX"
-  artifacts:
-    - path: "voicemode_telemetry.py"
-      issue: "STATUS_V1_KEYS does not expose transcribed_audio_s"
-    - path: "voice.py"
-      issue: "worker_consumer does not publish transcribed_audio_s during active recording chunks"
-    - path: "/home/pera/.config/quickshell/ii/services/Voice.qml"
-      issue: "FileView does not read status.json and lacks transcribedSeconds / eta properties"
-    - path: "/home/pera/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"
-      issue: "displayText does not render dual timer X:XX | X:XX or ETA countdown pill"
-  missing:
-    - "Extend status schema and worker publishing to emit transcribed_audio_s during parallel chunk decoding"
-    - "Connect Quickshell Voice.qml to status.json and expose transcribed duration and ETA properties"
-    - "Update VoicePill.qml displayText to render X:XX | X:XX during recording and live ETA countdown during transcribing"
-  debug_session: .planning/debug/status-pill-dual-timer.md
