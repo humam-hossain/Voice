@@ -689,5 +689,212 @@ class TestEmptyStateAndPrivacy(TempXdgTestCase):
         self.assertIn("⚠️ 3 row(s) skipped due to parse errors", html_doc)
 
 
+# ---------------------------------------------------------------------------
+# Task 1 & 2 (Plan 08-03): Pre-Render Lifecycle Hook & xdg-open Security
+# ---------------------------------------------------------------------------
+
+class TestPreRenderWorker(TempXdgTestCase):
+    """Task 1 (Plan 08-03): Pre-render worker finalization hook and status.json."""
+
+    def test_finalize_background_run_prerenders_report(self):
+        """RPT-04: finalize_background_run creates report.html in state directory."""
+        state_dir = voicemode_telemetry.get_state_dir()
+        report_file = state_dir / "report.html"
+        self.assertFalse(report_file.exists())
+
+        ev = voice.TranscriptionEvidence(
+            text="test pre-render",
+            model_state=MagicMock(),
+            decode_ms=500.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=3.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=3.0,
+        )
+        run_state = {
+            "lock": None,
+            "finalized": False,
+            "pid": None,
+            "run_id": "test-prerender",
+            "ts_start": time.time() - 2.0,
+            "t_start": time.monotonic() - 2.0,
+            "args": voice.parse_args([]),
+            "recorder": None,
+            "wav_paths": [],
+            "should_delete": False,
+            "outcome": "success",
+            "error_stage": None,
+            "results": {0: ev},
+            "results_lock": None,
+            "loader_state": {"load_ms": 100.0, "backend": "cpu, int8"},
+            "model_holder": {"state": None},
+            "text_holder": {"text": "hello"},
+            "chars_typed": [5],
+            "audio_s": 3.0,
+            "status_state": {},
+            "status_lock": None,
+            "finalize_ms": 30.0,
+            "insert_ms": 20.0,
+            "insert_ok": True,
+            "backend": "cpu, int8",
+            "predicted": {"shown_s": 1.5, "actual_s": 1.4},
+            "text": "hello",
+        }
+
+        with patch("voicemode_report.generate_prerendered_report", wraps=voicemode_report.generate_prerendered_report) as mock_gen:
+            voice.finalize_background_run(run_state, outcome="success")
+            mock_gen.assert_called_once()
+            self.assertTrue(report_file.exists())
+            content = report_file.read_text()
+            self.assertIn("Voicemode Accuracy Report", content)
+
+    def test_prerender_exception_does_not_crash_finalization(self):
+        """RPT-04: Exceptions in report pre-rendering are caught and do not prevent cleanup."""
+        ev = voice.TranscriptionEvidence(
+            text="test fail",
+            model_state=MagicMock(),
+            decode_ms=500.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=3.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=3.0,
+        )
+        run_state = {
+            "lock": None,
+            "finalized": False,
+            "pid": None,
+            "run_id": "test-prerender-fail",
+            "ts_start": time.time() - 2.0,
+            "t_start": time.monotonic() - 2.0,
+            "args": voice.parse_args([]),
+            "recorder": None,
+            "wav_paths": [],
+            "should_delete": False,
+            "outcome": "success",
+            "error_stage": None,
+            "results": {0: ev},
+            "results_lock": None,
+            "loader_state": {"load_ms": 100.0, "backend": "cpu, int8"},
+            "model_holder": {"state": None},
+            "text_holder": {"text": "hello"},
+            "chars_typed": [5],
+            "audio_s": 3.0,
+            "status_state": {},
+            "status_lock": None,
+            "finalize_ms": 30.0,
+            "insert_ms": 20.0,
+            "insert_ok": True,
+            "backend": "cpu, int8",
+            "predicted": {"shown_s": 1.5, "actual_s": 1.4},
+            "text": "hello",
+        }
+
+        with patch("voicemode_report.generate_prerendered_report", side_effect=RuntimeError("Disk full!")):
+            res = voice.finalize_background_run(run_state, outcome="success")
+            self.assertTrue(res)
+
+    def test_status_json_contains_report_path(self):
+        """status_state includes report_path pointing to state_dir / report.html."""
+        state_dir = voicemode_telemetry.get_state_dir()
+        expected_path = str(state_dir / "report.html")
+
+        status = voicemode_telemetry.build_status(
+            pid=1234,
+            run_id="r1",
+            started_at=time.time(),
+            audio_s=2.0,
+            report_path=expected_path,
+            state="recording",
+            phase="capture",
+        )
+        self.assertEqual(status.get("report_path"), expected_path)
+
+
+class TestXdgOpenSecurity(TempXdgTestCase):
+    """Task 2 (Plan 08-03): Secure xdg-open browser invocation."""
+
+    def test_xdg_open_path_validation(self):
+        """RPT-06: Paths outside state/metrics directory are rejected with warning and notification."""
+        evil_path = Path("/etc/passwd")
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("voice.notify") as mock_notify:
+            ok = voicemode_report.open_report_file(evil_path)
+            self.assertFalse(ok)
+            mock_popen.assert_not_called()
+            mock_notify.assert_called_once()
+            self.assertIn("Security", mock_notify.call_args[0][0])
+
+    def test_xdg_open_directory_rejected(self):
+        """RPT-06: Directory paths (even inside state_dir) are rejected."""
+        state_dir = voicemode_telemetry.get_state_dir()
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("voice.notify") as mock_notify:
+            ok = voicemode_report.open_report_file(state_dir)
+            self.assertFalse(ok)
+            mock_popen.assert_not_called()
+            mock_notify.assert_called_once()
+
+    def test_xdg_open_empty_path_rejected(self):
+        """RPT-06: Empty or None path is handled safely without throwing."""
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("voice.notify") as mock_notify:
+            ok = voicemode_report.open_report_file("")
+            self.assertFalse(ok)
+            mock_popen.assert_not_called()
+
+    def test_xdg_open_missing_binary_fallback(self):
+        """RPT-06: Missing xdg-open prints path and sends notification."""
+        safe_path = voicemode_telemetry.get_state_dir() / "report.html"
+        safe_path.touch()
+
+        with patch("shutil.which", return_value=None), \
+             patch("subprocess.Popen") as mock_popen, \
+             patch("voice.notify") as mock_notify:
+            ok = voicemode_report.open_report_file(safe_path)
+            self.assertFalse(ok)
+            mock_popen.assert_not_called()
+            mock_notify.assert_called_once()
+            self.assertIn(str(safe_path.resolve()), mock_notify.call_args[0][1])
+
+    def test_xdg_open_argument_list_execution(self):
+        """RPT-06: Valid target passes argument list to subprocess.Popen with start_new_session=True."""
+        safe_path = voicemode_telemetry.get_state_dir() / "report.html"
+        safe_path.touch()
+
+        with patch("shutil.which", return_value="/usr/bin/xdg-open"), \
+             patch("subprocess.Popen") as mock_popen:
+            ok = voicemode_report.open_report_file(safe_path)
+            self.assertTrue(ok)
+            mock_popen.assert_called_once_with(["/usr/bin/xdg-open", str(safe_path.resolve())], start_new_session=True)
+
+    def test_report_open_cli_triggers_launcher(self):
+        """voice.main(['--report', '--open']) triggers open_report_file."""
+        with patch("voicemode_report.open_report_file", return_value=True) as mock_open:
+            f = StringIO()
+            old = sys.stdout
+            try:
+                sys.stdout = f
+                code = voice.main(["--report", "--open"])
+            finally:
+                sys.stdout = old
+
+            self.assertEqual(code, 0)
+            mock_open.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1157,9 +1157,30 @@ def generate_prerendered_report(dest_path: Optional[Path] = None) -> Path:
 # Secure Browser Launch (D-24, RPT-06)
 # ---------------------------------------------------------------------------
 
-def open_report_file(path: Path, args: Optional[argparse.Namespace] = None) -> bool:
+def open_report_file(path: Path | str, args: Optional[argparse.Namespace] = None) -> bool:
     """Strictly validates target path before executing xdg-open with notification fallback (D-24, RPT-06)."""
-    target = Path(path).resolve()
+    if not path:
+        msg = "Report file not specified"
+        print(msg, file=sys.stderr, flush=True)
+        try:
+            from voice import notify
+            notify("Voice Report", msg, args)
+        except Exception:
+            pass
+        return False
+
+    try:
+        target = Path(path).resolve()
+    except Exception as exc:
+        msg = f"Invalid report path: {exc}"
+        print(msg, file=sys.stderr, flush=True)
+        try:
+            from voice import notify
+            notify("Voice Report", msg, args)
+        except Exception:
+            pass
+        return False
+
     allowed_dirs = [
         voicemode_telemetry.get_state_dir().resolve(),
         voicemode_telemetry.get_metrics_dir().resolve(),
@@ -1179,6 +1200,16 @@ def open_report_file(path: Path, args: Optional[argparse.Namespace] = None) -> b
         try:
             from voice import notify
             notify("Voice Report Security", f"Open rejected: {target} outside state dir", args)
+        except Exception:
+            pass
+        return False
+
+    if not target.is_file():
+        msg = f"Report file not found: {target}"
+        print(msg, file=sys.stderr, flush=True)
+        try:
+            from voice import notify
+            notify("Voice Report", f"Report file not found: {target}", args)
         except Exception:
             pass
         return False

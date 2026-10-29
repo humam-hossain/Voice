@@ -2199,7 +2199,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         "eta_confidence": None,
         "eta_source": None,
         "overrun": False,
-        "report_path": None,
+        "report_path": str(voicemode_telemetry.get_state_dir() / "report.html"),
     }
     last_eta_update = 0.0
     last_eta_remaining = None
