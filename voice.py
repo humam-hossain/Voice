@@ -2187,6 +2187,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         "audio_s": 0.0,
         "segments": 0,
         "segments_done": 0,
+        "transcribed_audio_s": 0.0,
         "eta_remaining_s": None,
         "eta_confidence": None,
         "eta_source": None,
@@ -2486,6 +2487,19 @@ def run_background_recording(args: argparse.Namespace) -> int:
             if capture_closed.is_set():
                 tot = total_chunks_holder["n"] or max(done, 1)
                 _publish_status("transcribing", "decode", segments=tot, segments_done=done)
+            else:
+                # Publish incremental transcription progress while still recording
+                with results_lock:
+                    transcribed_s = sum(
+                        r.audio_s for r in results.values()
+                        if r and getattr(r, "audio_s", None)
+                    )
+                _publish_status(
+                    "recording",
+                    "capture",
+                    segments_done=done,
+                    transcribed_audio_s=transcribed_s,
+                )
 
         pred = run_state.get("predicted")
         if pred and isinstance(pred, dict):
@@ -2573,6 +2587,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 try:
                     live = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
                     segs = int(math.ceil(live / seg_duration)) if seg_duration and seg_duration > 0 else 0
+                    with status_lock:
+                        cur_transcribed = status_state.get("transcribed_audio_s", 0.0)
                     _publish_status(
                         "recording",
                         "capture",
@@ -2583,6 +2599,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                         eta_source=None,
                         eta_confidence=None,
                         overrun=False,
+                        transcribed_audio_s=cur_transcribed,
                     )
                 except Exception:
                     pass
@@ -2885,6 +2902,7 @@ def print_status(args: argparse.Namespace = None) -> int:
                             "audio_s": st.get("audio_s"),
                             "segments": st.get("segments"),
                             "segments_done": st.get("segments_done"),
+                            "transcribed_audio_s": st.get("transcribed_audio_s"),
                             "pid": st.get("pid") or pid,
                             "run_id": st.get("run_id"),
                             "overrun": bool(st.get("overrun")),

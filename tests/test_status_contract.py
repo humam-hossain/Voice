@@ -374,3 +374,42 @@ class TestStatusContract(TempXdgTestCase):
             self.assertFalse((voicemode_telemetry.get_state_dir() / 'status.json').exists())
         finally:
             os.environ.pop('VOICE_METRICS', None)
+
+    def test_transcribed_audio_s_schema_acceptance(self):
+        """transcribed_audio_s is accepted in STATUS_V1_KEYS and round-trips through build/validate."""
+        self.assertIn('transcribed_audio_s', voicemode_telemetry.STATUS_V1_KEYS)
+        s = voicemode_telemetry.build_status(
+            pid=123, run_id='r1', state='recording', phase='capture',
+            started_at=1.0, updated_at=1000.0, transcribed_audio_s=5.5,
+        )
+        self.assertEqual(s['transcribed_audio_s'], 5.5)
+        # None is accepted
+        s2 = voicemode_telemetry.build_status(
+            pid=123, run_id='r1', state='recording', phase='capture',
+            started_at=1.0, updated_at=1000.0, transcribed_audio_s=None,
+        )
+        self.assertIsNone(s2['transcribed_audio_s'])
+        # Default is None
+        s3 = voicemode_telemetry.build_status(
+            pid=123, run_id='r1', state='recording', phase='capture',
+            started_at=1.0, updated_at=1000.0,
+        )
+        self.assertIsNone(s3['transcribed_audio_s'])
+
+    def test_transcribed_audio_s_negative_clamped(self):
+        """Negative transcribed_audio_s is clamped to 0.0."""
+        s = voicemode_telemetry.build_status(
+            pid=123, run_id='r1', state='recording', phase='capture',
+            started_at=1.0, updated_at=1000.0, transcribed_audio_s=-1.0,
+        )
+        self.assertEqual(s['transcribed_audio_s'], 0.0)
+
+    def test_transcribed_audio_s_json_serialization(self):
+        """transcribed_audio_s appears in JSON output and survives round-trip."""
+        s = voicemode_telemetry.build_status(
+            pid=123, run_id='r1', state='recording', phase='capture',
+            started_at=1.0, updated_at=1000.0, transcribed_audio_s=12.345,
+        )
+        j = json.dumps(s)
+        parsed = json.loads(j)
+        self.assertAlmostEqual(parsed['transcribed_audio_s'], 12.345, places=3)

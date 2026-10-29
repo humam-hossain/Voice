@@ -543,9 +543,9 @@ def with_pid_lock(lock_path: Optional[Path] = None) -> Iterator[None]:
 # Status contract v1
 STATUS_V1_KEYS = [
     "schema", "pid", "run_id", "state", "phase", "started_at", "updated_at",
-    "expires_at", "audio_s", "segments", "segments_done", "eta_epoch",
-    "eta_remaining_s", "eta_confidence", "eta_source", "overrun", "report_path",
-    "revision_count", "last_revised_at", "key_level", "key_n"
+    "expires_at", "audio_s", "segments", "segments_done", "transcribed_audio_s",
+    "eta_epoch", "eta_remaining_s", "eta_confidence", "eta_source", "overrun",
+    "report_path", "revision_count", "last_revised_at", "key_level", "key_n"
 ]
 PID_STATES = ("starting", "recording", "transcribing", "typing", "speaking")
 STATUS_PHASES = ("init", "capture", "finalize", "load", "decode", "insert", "wrap-up")
@@ -570,7 +570,8 @@ def prior_eta_seconds(audio_s, model=None):
 
 
 def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expires_at=None,
-                  audio_s=0.0, segments=0, segments_done=0, eta_epoch=None, eta_remaining_s=None,
+                  audio_s=0.0, segments=0, segments_done=0, transcribed_audio_s=None,
+                  eta_epoch=None, eta_remaining_s=None,
                   eta_confidence=None, eta_source=None, overrun=False, report_path=None,
                   revision_count: int = 0, last_revised_at: Optional[float] = None,
                   key_level: Optional[str] = None, key_n: Optional[int] = None):
@@ -598,6 +599,14 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
         segments_done_i = 0
     if segments_i > 0 and segments_done_i > segments_i:
         segments_done_i = segments_i
+    # transcribed_audio_s: non-negative float or None
+    if transcribed_audio_s is not None:
+        try:
+            transcribed_audio_s_r = round(max(0.0, float(transcribed_audio_s)), 3)
+        except Exception:
+            transcribed_audio_s_r = None
+    else:
+        transcribed_audio_s_r = None
     if eta_remaining_s is not None:
         try:
             eta_remaining_s_r = round(float(eta_remaining_s), 2)
@@ -635,6 +644,7 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
     status["audio_s"] = audio_s_r
     status["segments"] = segments_i
     status["segments_done"] = segments_done_i
+    status["transcribed_audio_s"] = transcribed_audio_s_r
     status["eta_epoch"] = eta_epoch
     status["eta_remaining_s"] = eta_remaining_s_r
     status["eta_confidence"] = eta_confidence
@@ -695,6 +705,15 @@ def validate_status(status):
         raise
     except Exception:
         pass
+    transcribed = status.get("transcribed_audio_s")
+    if transcribed is not None:
+        try:
+            if float(transcribed) < 0:
+                raise ValueError("negative transcribed_audio_s")
+        except ValueError:
+            raise
+        except Exception:
+            pass
     try:
         s = json.dumps(status, separators=(",", ":"), ensure_ascii=True)
         if len(s.encode("utf-8")) > STATUS_MAX_BYTES:
