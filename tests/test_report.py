@@ -1,0 +1,518 @@
+"""Tests for voicemode_report: reporting engine, CLI dispatch, filtering, CSV/JSON export."""
+from __future__ import annotations
+
+import csv
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+import unittest
+from io import StringIO
+from unittest.mock import MagicMock, patch
+
+from _hermetic import TempXdgTestCase
+import voice
+import voicemode_report
+import voicemode_telemetry
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_record(
+    run_id="run-1",
+    audio_s=4.0,
+    pred_s=2.5,
+    actual_s=2.4,
+    load_ms=200.0,
+    decode_ms=2100.0,
+    finalize_ms=50.0,
+    insert_ms=50.0,
+    model="medium",
+    device="cpu",
+    outcome="success",
+    ts_start=None,
+):
+    now = time.time()
+    return {
+        "schema": 1,
+        "source": "stt",
+        "run_id": run_id,
+        "install_id": "test-install",
+        "ts_start": ts_start or (now - 10.0),
+        "ts_end": now,
+        "outcome": outcome,
+        "error_stage": None,
+        "actual": {
+            "total_ms": (actual_s * 1000.0) if actual_s is not None else None,
+            "load_ms": load_ms,
+            "decode_ms": decode_ms,
+            "finalize_ms": finalize_ms,
+            "insert_ms": insert_ms,
+        },
+        "predicted": {
+            "shown_s": pred_s,
+            "shown_at_epoch": now - 8.0,
+            "source": "calibrated",
+            "key_level": "L0",
+            "n": 10,
+            "confidence": "high",
+            "revisions": 0,
+            "actual_s": actual_s,
+        },
+        "audio_s": audio_s,
+        "chars_out": 25,
+        "chars_typed": 25,
+        "fallback_used": False,
+        "insert_ok": True,
+        "segments": [],
+        "config": {
+            "model": model,
+            "device": device,
+            "compute_type": "int8",
+            "beam_size": 1,
+            "vad_filter": True,
+            "language": "en",
+            "chunk_s": 180.0,
+        },
+        "backend": f"{device}, int8",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Tracer Tests — CLI dispatch, zero-import, ledger loading
+# ---------------------------------------------------------------------------
+
+class TestReportCLI(TempXdgTestCase):
+    """Task 1: End-to-end reporting pipeline tracer tests."""
+
+    def test_no_heavy_imports_on_report_path(self):
+        """RPT-01: voice --report must never load faster_whisper, numpy, or sounddevice."""
+        code = (
+            "import sys; "
+            "sys.path.insert(0, '.'); "
+            "import voice; "
+            "args = voice.parse_args(['--report']); "
+            "import voicemode_report; "
+            "voicemode_report.handle_report_command(args); "
+            "forbidden = ['faster_whisper', 'numpy', 'sounddevice']; "
+            "loaded = [m for m in forbidden if m in sys.modules]; "
+            "assert not loaded, f'Heavy modules imported: {loaded}'"
+        )
+        res = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            env={**os.environ, "XDG_RUNTIME_DIR": str(self.run_dir), "XDG_STATE_HOME": str(self.state_dir)},
+        )
+        self.assertEqual(res.returncode, 0, f"Import assertion failed: {res.stderr}")
+
+    def test_report_tracer_cli(self):
+        """voice --report dispatches to voicemode_report and produces output."""
+        # Write a sample record
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--report"])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        output = f.getvalue()
+        self.assertIn("Voice Accuracy Report", output)
+        self.assertIn("Total Runs", output)
+
+    def test_metrics_cli_dispatch(self):
+        """voice --metrics dispatches to voicemode_report."""
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--metrics"])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        output = f.getvalue()
+        self.assertIn("Ledger:", output)
+
+    def test_metrics_json_dispatch(self):
+        """voice --metrics --json-status dispatches and produces JSON."""
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--metrics", "--json-status"])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        output = f.getvalue().strip()
+        data = json.loads(output)
+        self.assertIn("summary", data)
+        self.assertIn("ledger", data)
+
+    def test_ledger_loading_with_torn_lines(self):
+        """D-21: Corrupt/torn lines are skipped without crashing."""
+        ledger_path = voicemode_telemetry.get_ledger_path()
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+        valid = _make_record(run_id="valid-1")
+        valid_line = json.dumps(valid)
+
+        with open(ledger_path, "w", encoding="utf-8") as f:
+            f.write(valid_line + "\n")
+            f.write('{"broken json\n')
+            f.write('not json at all\n')
+            f.write('{"schema": 999, "wrong": true}\n')
+            f.write("\n")  # blank line
+
+        records, skipped = voicemode_report.load_ledger_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["run_id"], "valid-1")
+        self.assertEqual(skipped, 3)  # broken json, not json, wrong schema
+
+    def test_ledger_loading_empty(self):
+        """Empty/missing ledger returns empty list with zero skipped."""
+        records, skipped = voicemode_report.load_ledger_records()
+        self.assertEqual(len(records), 0)
+        self.assertEqual(skipped, 0)
+
+    def test_parse_args_report_flags(self):
+        """CLI parser recognizes all reporting flags."""
+        args = voice.parse_args(["--report", "--format", "csv", "--output", "/tmp/test.csv", "--open", "--since", "7d", "--last", "50"])
+        self.assertTrue(args.report)
+        self.assertEqual(args.format, "csv")
+        self.assertEqual(args.output, "/tmp/test.csv")
+        self.assertTrue(getattr(args, "open", False))
+        self.assertEqual(args.since, "7d")
+        self.assertEqual(args.last, "50")
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Filtering and Statistics Tests
+# ---------------------------------------------------------------------------
+
+class TestReportFilteringAndStats(TempXdgTestCase):
+    """Task 2: Multi-criteria filtering, statistics, terminal formatting."""
+
+    def test_parse_since_relative_hours(self):
+        """parse_since_argument('24h') produces timestamp 24h ago."""
+        now = time.time()
+        ts = voicemode_report.parse_since_argument("24h")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, now - 86400, delta=2.0)
+
+    def test_parse_since_relative_days(self):
+        """parse_since_argument('7d') produces timestamp 7d ago."""
+        now = time.time()
+        ts = voicemode_report.parse_since_argument("7d")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, now - 7 * 86400, delta=2.0)
+
+    def test_parse_since_relative_minutes(self):
+        """parse_since_argument('60m') produces timestamp 60m ago."""
+        now = time.time()
+        ts = voicemode_report.parse_since_argument("60m")
+        self.assertIsNotNone(ts)
+        self.assertAlmostEqual(ts, now - 3600, delta=2.0)
+
+    def test_parse_since_iso_date(self):
+        """parse_since_argument('2026-10-01') produces an epoch timestamp."""
+        ts = voicemode_report.parse_since_argument("2026-10-01")
+        self.assertIsNotNone(ts)
+        self.assertGreater(ts, 0)
+
+    def test_parse_since_invalid(self):
+        """parse_since_argument with garbage returns None."""
+        self.assertIsNone(voicemode_report.parse_since_argument("garbage"))
+        self.assertIsNone(voicemode_report.parse_since_argument(""))
+
+    def test_filter_by_model(self):
+        """filter_records filters by model case-insensitively."""
+        records = [
+            _make_record(run_id="r1", model="medium"),
+            _make_record(run_id="r2", model="small"),
+            _make_record(run_id="r3", model="Medium"),
+        ]
+        filtered = voicemode_report.filter_records(records, model="medium", last="all")
+        run_ids = [r["run_id"] for r in filtered]
+        self.assertIn("r1", run_ids)
+        self.assertIn("r3", run_ids)
+        self.assertNotIn("r2", run_ids)
+
+    def test_filter_by_device(self):
+        """filter_records filters by device case-insensitively."""
+        records = [
+            _make_record(run_id="r1", device="cpu"),
+            _make_record(run_id="r2", device="cuda"),
+        ]
+        filtered = voicemode_report.filter_records(records, device="cuda", last="all")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["run_id"], "r2")
+
+    def test_filter_by_last(self):
+        """filter_records limits to last N records."""
+        records = [_make_record(run_id=f"r-{i}") for i in range(20)]
+        filtered = voicemode_report.filter_records(records, last=5)
+        self.assertEqual(len(filtered), 5)
+        self.assertEqual(filtered[0]["run_id"], "r-15")
+
+    def test_filter_last_all(self):
+        """filter_records with last='all' returns everything."""
+        records = [_make_record(run_id=f"r-{i}") for i in range(20)]
+        filtered = voicemode_report.filter_records(records, last="all")
+        self.assertEqual(len(filtered), 20)
+
+    def test_filter_by_since(self):
+        """filter_records filters by since timestamp."""
+        now = time.time()
+        old_record = _make_record(run_id="old", ts_start=now - 200000)
+        new_record = _make_record(run_id="new", ts_start=now - 100)
+        records = [old_record, new_record]
+        filtered = voicemode_report.filter_records(records, since="24h", last="all")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["run_id"], "new")
+
+    def test_filter_combined(self):
+        """filter_records applies model + device + last together."""
+        records = [
+            _make_record(run_id="r1", model="medium", device="cpu"),
+            _make_record(run_id="r2", model="medium", device="cuda"),
+            _make_record(run_id="r3", model="small", device="cpu"),
+        ]
+        filtered = voicemode_report.filter_records(records, model="medium", device="cpu", last="all")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["run_id"], "r1")
+
+    def test_compute_metrics_basic(self):
+        """compute_report_metrics produces correct aggregates."""
+        records = [
+            _make_record(run_id="r1", pred_s=2.5, actual_s=2.4),
+            _make_record(run_id="r2", pred_s=3.0, actual_s=2.8),
+            _make_record(run_id="r3", pred_s=1.5, actual_s=1.6),
+        ]
+        metrics = voicemode_report.compute_report_metrics(records)
+        self.assertEqual(metrics["total_runs"], 3)
+        self.assertIsNotNone(metrics["median_error_pct"])
+        self.assertIsNotNone(metrics["p90_latency_s"])
+        self.assertGreater(metrics["median_error_pct"], 0)
+
+    def test_compute_metrics_empty(self):
+        """compute_report_metrics on empty records returns nulls, no crash."""
+        metrics = voicemode_report.compute_report_metrics([])
+        self.assertEqual(metrics["total_runs"], 0)
+        self.assertIsNone(metrics["median_error_pct"])
+        self.assertIsNone(metrics["p90_latency_s"])
+        self.assertEqual(metrics["calibration_tier"], "prior")
+        self.assertIsNone(metrics["last_run_timestamp"])
+
+    def test_compute_metrics_single_run(self):
+        """compute_report_metrics handles a single run without crashing."""
+        records = [_make_record(run_id="single")]
+        metrics = voicemode_report.compute_report_metrics(records)
+        self.assertEqual(metrics["total_runs"], 1)
+        self.assertIsNotNone(metrics["median_error_pct"])
+
+    def test_terminal_summary_output(self):
+        """render_terminal_summary produces formatted card with runs table."""
+        records = [_make_record(run_id=f"r-{i}") for i in range(5)]
+        metrics = voicemode_report.compute_report_metrics(records)
+        output = voicemode_report.render_terminal_summary(records, metrics)
+        self.assertIn("Voice Accuracy Report", output)
+        self.assertIn("Total Runs", output)
+        self.assertIn("5", output)
+        self.assertIn("RUN_ID", output)
+
+    def test_terminal_summary_empty_state(self):
+        """render_terminal_summary with no records shows empty state message."""
+        metrics = voicemode_report.compute_report_metrics([])
+        output = voicemode_report.render_terminal_summary([], metrics)
+        self.assertIn("No runs recorded yet", output)
+        self.assertIn("SUPER+SHIFT+M", output)
+
+    def test_terminal_summary_shows_report_path(self):
+        """render_terminal_summary includes report.html path."""
+        records = [_make_record()]
+        metrics = voicemode_report.compute_report_metrics(records)
+        output = voicemode_report.render_terminal_summary(records, metrics)
+        self.assertIn("report.html", output)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: CSV and JSON Export Tests
+# ---------------------------------------------------------------------------
+
+class TestExportFormats(TempXdgTestCase):
+    """Task 3: CSV headers, JSON convergence, --output flag."""
+
+    def test_csv_export_headers_and_data(self):
+        """RPT-05: CSV has exactly 17 canonical headers in stable order."""
+        records = [
+            _make_record(run_id="r1", audio_s=4.0, pred_s=2.5, actual_s=2.4),
+            _make_record(run_id="r2", audio_s=6.0, pred_s=3.0, actual_s=2.8),
+        ]
+        csv_text = voicemode_report.render_csv(records)
+        reader = csv.reader(io.StringIO(csv_text))
+        headers = next(reader)
+        self.assertEqual(headers, voicemode_report.CSV_HEADERS)
+        self.assertEqual(len(headers), 17)
+
+        rows = list(reader)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "r1")  # run_id
+        self.assertEqual(rows[1][0], "r2")
+
+    def test_csv_export_empty(self):
+        """CSV with zero records produces headers only."""
+        csv_text = voicemode_report.render_csv([])
+        reader = csv.reader(io.StringIO(csv_text))
+        headers = next(reader)
+        self.assertEqual(headers, voicemode_report.CSV_HEADERS)
+        rows = list(reader)
+        self.assertEqual(len(rows), 0)
+
+    def test_csv_headers_constant(self):
+        """CSV_HEADERS is a list of exactly 17 strings."""
+        self.assertEqual(len(voicemode_report.CSV_HEADERS), 17)
+        expected_order = [
+            "run_id", "timestamp", "model", "device", "audio_s", "predicted_s",
+            "actual_s", "error_s", "error_pct", "load_s", "record_s", "decode_s",
+            "finalize_s", "insert_s", "outcome", "eta_source", "confidence",
+        ]
+        self.assertEqual(voicemode_report.CSV_HEADERS, expected_order)
+
+    def test_converged_json_schema(self):
+        """RPT-05: --metrics --json and --report --format json produce identical schema keys."""
+        rec = _make_record(run_id="r1")
+        voicemode_telemetry.append_ledger_row(rec)
+
+        # Metrics JSON
+        metrics_out = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = metrics_out
+            voice.main(["--metrics", "--json-status"])
+        finally:
+            sys.stdout = old
+
+        # Report JSON
+        report_out = StringIO()
+        try:
+            sys.stdout = report_out
+            voice.main(["--report", "--format", "json"])
+        finally:
+            sys.stdout = old
+
+        m_obj = json.loads(metrics_out.getvalue().strip())
+        r_obj = json.loads(report_out.getvalue().strip())
+
+        self.assertEqual(set(m_obj.keys()), set(r_obj.keys()))
+        self.assertEqual(set(m_obj["summary"].keys()), set(r_obj["summary"].keys()))
+        self.assertEqual(set(m_obj["ledger"].keys()), set(r_obj["ledger"].keys()))
+
+    def test_json_schema_empty(self):
+        """JSON output with zero runs has null summary fields."""
+        metrics = voicemode_report.compute_report_metrics([])
+        ledger_info = {"path": "/tmp/test.jsonl", "bytes": 0, "rows": 0, "archives": 0}
+        json_str = voicemode_report.render_json(metrics, ledger_info)
+        data = json.loads(json_str)
+
+        self.assertEqual(data["summary"]["total_runs"], 0)
+        self.assertIsNone(data["summary"]["median_error_pct"])
+        self.assertIsNone(data["summary"]["p90_latency_s"])
+        self.assertEqual(data["summary"]["calibration_tier"], "prior")
+        self.assertIsNone(data["summary"]["last_run_timestamp"])
+        self.assertEqual(data["ledger"]["schema_version"], 1)
+
+    def test_output_flag_csv(self):
+        """--output with .csv extension writes CSV file."""
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        output_path = self.state_dir / "test_output.csv"
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--report", "--output", str(output_path)])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        self.assertTrue(output_path.exists())
+        content = output_path.read_text()
+        reader = csv.reader(io.StringIO(content))
+        headers = next(reader)
+        self.assertEqual(headers, voicemode_report.CSV_HEADERS)
+
+    def test_output_flag_json(self):
+        """--output with .json extension writes JSON file."""
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        output_path = self.state_dir / "test_output.json"
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--report", "--output", str(output_path)])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        self.assertTrue(output_path.exists())
+        data = json.loads(output_path.read_text())
+        self.assertIn("summary", data)
+        self.assertIn("ledger", data)
+
+    def test_format_flag_overrides_extension(self):
+        """--format flag takes precedence over --output extension."""
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        output_path = self.state_dir / "test.csv"
+        f = StringIO()
+        old = sys.stdout
+        try:
+            sys.stdout = f
+            code = voice.main(["--report", "--format", "json", "--output", str(output_path)])
+        finally:
+            sys.stdout = old
+
+        self.assertEqual(code, 0)
+        content = output_path.read_text()
+        data = json.loads(content)
+        self.assertIn("summary", data)
+
+    def test_record_to_csv_row_fields(self):
+        """record_to_csv_row extracts all 17 fields."""
+        rec = _make_record(run_id="test-row", audio_s=3.0, pred_s=2.0, actual_s=1.8)
+        row = voicemode_report.record_to_csv_row(rec)
+        for header in voicemode_report.CSV_HEADERS:
+            self.assertIn(header, row, f"Missing CSV field: {header}")
+
+    def test_prerender_creates_report_html(self):
+        """generate_prerendered_report creates report.html."""
+        rec = _make_record()
+        voicemode_telemetry.append_ledger_row(rec)
+
+        report_path = voicemode_report.generate_prerendered_report()
+        self.assertTrue(report_path.exists())
+        content = report_path.read_text()
+        self.assertIn("Voice Accuracy Report", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

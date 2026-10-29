@@ -1303,6 +1303,13 @@ def finalize_background_run(
                     voicemode_telemetry.update_calibration_from_run(record)
                 except Exception:
                     pass
+
+                # Pre-render report.html for instant click-through (last 200 runs) (D-18, D-20)
+                try:
+                    import voicemode_report
+                    voicemode_report.generate_prerendered_report()
+                except Exception as rpt_exc:
+                    print(f"Error generating prerendered report: {rpt_exc}", file=sys.stderr, flush=True)
         except Exception as ledger_exc:
             print(f"Error appending ledger row: {ledger_exc}", file=sys.stderr, flush=True)
 
@@ -3891,7 +3898,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--json-status", dest="json_status", action="store_true", help="JSON output where supported.")
     parser.add_argument("--reset-calibration", action="store_true", help="Reset ETA calibration to priors.")
     parser.add_argument("--metrics", action="store_true", help="Show metrics summary.")
-    parser.add_argument("--report", action="store_true", help="Generate report (placeholder).")
+    parser.add_argument("--report", action="store_true", help="Generate accuracy and latency report.")
+    parser.add_argument(
+        "--format",
+        choices=("text", "html", "csv", "json"),
+        default=None,
+        help="Report output format (default: text). Inferred from --output extension if set.",
+    )
+    parser.add_argument("--output", metavar="PATH", help="Write report output to specified file.")
+    parser.add_argument("--open", action="store_true", help="Open HTML report in default browser via xdg-open.")
+    parser.add_argument("--since", metavar="TIME", help="Filter report runs since ISO date or relative duration (e.g. 24h, 7d).")
+    parser.add_argument("--last", metavar="N", default=None, help="Filter report to last N runs or 'all' (default: 200).")
     parser.add_argument(
         "--install-hotkey",
         action="store_true",
@@ -4033,8 +4050,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     if getattr(args, "kill", False):
         return kill_all_daemons(args)
@@ -4056,21 +4073,18 @@ def main() -> int:
         return 0
     if getattr(args, "metrics", False):
         try:
-            import voicemode_telemetry
-            h = voicemode_telemetry.ledger_health()
-            print(json.dumps(h))
-        except Exception:
-            print(json.dumps({"enabled": True}))
-        return 0
+            import voicemode_report
+            return voicemode_report.handle_metrics_command(args)
+        except Exception as exc:
+            print(f"Error displaying metrics: {exc}", file=sys.stderr)
+            return 1
     if getattr(args, "report", False):
         try:
-            import voicemode_telemetry
-            # generate simple report placeholder
-            rows = list(voicemode_telemetry.read_ledger_rows())
-            print(f"runs: {len(rows)}")
-        except Exception:
-            print("runs: 0")
-        return 0
+            import voicemode_report
+            return voicemode_report.handle_report_command(args)
+        except Exception as exc:
+            print(f"Error generating report: {exc}", file=sys.stderr)
+            return 1
 
     if args.download_tts_assets:
         return download_tts_assets(args)
