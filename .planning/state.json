@@ -36,7 +36,7 @@
     {
       "number": "7",
       "name": "ETA Engine & Calibration",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "8",
@@ -56,8 +56,8 @@
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 07 of 5 · 20% · executing"
+    "label": "Advance to the next step (plan phase 8)",
+    "reason": "Phase 8 of 5 — needs a plan"
   },
-  "updated_at": "2026-10-28T22:47:58.346Z"
+  "updated_at": "2026-10-29T02:06:13.038Z"
 }
