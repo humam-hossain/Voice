@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import time
@@ -169,3 +170,219 @@ class TestOverrunAndDisplay(TempXdgTestCase):
         self.assertIsNone(st["eta_epoch"])
         self.assertIsNone(st["eta_source"])
         self.assertIsNone(st["eta_confidence"])
+
+
+class TestEtaLeakageDuringRecording(TempXdgTestCase):
+    def test_chunk_decoding_during_recording_does_not_leak_eta_or_poison_shown_s(self) -> None:
+        """Background chunk decoding must not leak 1s-4s ETAs while recording or poison shown_s in ledger."""
+        args = voice.parse_args([])
+        args.no_beep = True
+        args.no_notify = True
+        args.paste = False
+
+        chunk1 = Path("/tmp/chunk1.wav")
+        chunk2 = Path("/tmp/chunk2.wav")
+
+        published_statuses: list[dict] = []
+        original_publish = voicemode_telemetry.publish_status
+
+        def tracking_publish(st):
+            published_statuses.append(dict(st))
+            return original_publish(st)
+
+        fake_recorder = MagicMock()
+        fake_recorder.recording = True
+        fake_recorder.started_at = time.monotonic() - 30.0
+        fake_recorder.on_chunk_ready = None
+        fake_recorder.chunk_audio_s = lambda idx: 5.0
+
+        def fake_load_model(call_args, force_cpu=False):
+            return MagicMock()
+
+        def fake_transcribe_timed(model_state, path, call_args, initial_prompt=None, audio_s=None, on_segment_yield=None):
+            # When chunk1 is decoded during recording, simulate segment yield callback
+            if on_segment_yield:
+                on_segment_yield(2.0, audio_s or 5.0, 0.5)
+            return voice.TranscriptionEvidence(
+                text="chunk " + path.stem,
+                model_state=model_state,
+                decode_ms=20.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=5.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=audio_s or 5.0,
+            )
+
+        def fake_start():
+            if fake_recorder.on_chunk_ready:
+                # Chunk 1 ready while recording is ongoing
+                fake_recorder.on_chunk_ready(1, chunk1, 5.0)
+
+        fake_recorder.start.side_effect = fake_start
+
+        def fake_stop(save_dir=None):
+            fake_recorder.recording = False
+            # 30 seconds total audio
+            return ([chunk1, chunk2], 30.0, False)
+
+        fake_recorder.stop_to_wav.side_effect = fake_stop
+
+        handlers = {}
+
+        def fake_signal(sig, handler):
+            handlers[sig] = handler
+
+        def fake_sleep(duration):
+            import threading
+            threading.Event().wait(0.05)
+            if voice.signal.SIGUSR1 in handlers:
+                handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
+
+        with patch("signal.signal", side_effect=fake_signal), \
+             patch("voice.Recorder", return_value=fake_recorder), \
+             patch("voice.play_cue"), \
+             patch("voice.play_cue_async"), \
+             patch("voice.write_pid_state"), \
+             patch("voice.remove_pid"), \
+             patch("voice.load_model", side_effect=fake_load_model), \
+             patch("voice.transcribe_timed", side_effect=fake_transcribe_timed), \
+             patch("voice.time.sleep", side_effect=fake_sleep), \
+             patch("voicemode_telemetry.publish_status", side_effect=tracking_publish):
+            code = voice.run_background_recording(args)
+
+        self.assertEqual(code, 0)
+
+        # 1. While recording was active, no status should have had eta_remaining_s or state='transcribing'
+        recording_statuses = [st for st in published_statuses if st.get("state") == "recording"]
+        self.assertTrue(len(recording_statuses) > 0)
+        for st in recording_statuses:
+            self.assertIsNone(
+                st.get("eta_remaining_s"),
+                f"ETA leaked during recording state: {st}",
+            )
+
+        # Chunks decoded while recording must not have published state='transcribing' prematurely
+        # Any published status while fake_recorder was recording must NOT have state='transcribing'
+        # and must not have an ETA remaining.
+        # 2. Check the ledger record: shown_s must reflect full-audio ETA (~30s audio -> >=10s ETA), NOT 1s-4s chunk ETA!
+        ledger_path = voicemode_telemetry.get_ledger_path()
+        self.assertTrue(ledger_path.exists(), "Ledger should exist")
+        lines = [l for l in ledger_path.read_text().splitlines() if l.strip()]
+        self.assertTrue(len(lines) > 0, "Ledger record should have been written")
+        rec = json.loads(lines[-1])
+        predicted = rec.get("predicted", {})
+        shown_s = predicted.get("shown_s")
+        self.assertIsNotNone(shown_s, "shown_s should be recorded upon transitioning to transcribing")
+        self.assertGreaterEqual(
+            shown_s,
+            10.0,
+            f"shown_s was poisoned with small chunk ETA: {shown_s} (expected full audio ETA >= 10.0 for 30s audio)",
+        )
+
+    def test_midrun_revision_functions_normally_after_capture_closed(self) -> None:
+        """After capture_closed is set, segment yields in remaining chunks update mid-run revisions and do not overwrite shown_s."""
+        args = voice.parse_args([])
+        args.no_beep = True
+        args.no_notify = True
+        args.paste = False
+
+        chunk1 = Path("/tmp/chunk1.wav")
+        chunk2 = Path("/tmp/chunk2.wav")
+
+        published_statuses: list[dict] = []
+        original_publish = voicemode_telemetry.publish_status
+
+        def tracking_publish(st):
+            published_statuses.append(dict(st))
+            return original_publish(st)
+
+        fake_recorder = MagicMock()
+        fake_recorder.recording = True
+        fake_recorder.started_at = time.monotonic() - 30.0
+        fake_recorder.on_chunk_ready = None
+        fake_recorder.chunk_audio_s = lambda idx: 15.0
+
+        def fake_load_model(call_args, force_cpu=False):
+            return MagicMock()
+
+        def fake_transcribe_timed(model_state, path, call_args, initial_prompt=None, audio_s=None, on_segment_yield=None):
+            # When chunk2 is decoded after recording stops, simulate segment yield callback
+            if on_segment_yield:
+                on_segment_yield(6.0, audio_s or 15.0, 2.0)
+            return voice.TranscriptionEvidence(
+                text="chunk " + path.stem,
+                model_state=model_state,
+                decode_ms=20.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=15.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=audio_s or 15.0,
+            )
+
+        def fake_start():
+            pass  # Do not enqueue chunk during recording
+
+        fake_recorder.start.side_effect = fake_start
+
+        def fake_stop(save_dir=None):
+            fake_recorder.recording = False
+            return ([chunk1, chunk2], 30.0, False)
+
+        fake_recorder.stop_to_wav.side_effect = fake_stop
+
+        handlers = {}
+
+        def fake_signal(sig, handler):
+            handlers[sig] = handler
+
+        def fake_sleep(duration):
+            import threading
+            threading.Event().wait(0.05)
+            if voice.signal.SIGUSR1 in handlers:
+                handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
+
+        with patch("signal.signal", side_effect=fake_signal), \
+             patch("voice.Recorder", return_value=fake_recorder), \
+             patch("voice.play_cue"), \
+             patch("voice.play_cue_async"), \
+             patch("voice.write_pid_state"), \
+             patch("voice.remove_pid"), \
+             patch("voice.load_model", side_effect=fake_load_model), \
+             patch("voice.transcribe_timed", side_effect=fake_transcribe_timed), \
+             patch("voice.time.sleep", side_effect=fake_sleep), \
+             patch("voicemode_telemetry.publish_status", side_effect=tracking_publish):
+            code = voice.run_background_recording(args)
+
+        self.assertEqual(code, 0)
+
+        # Transcribing decode statuses should have been published for chunk2
+        decode_statuses = [
+            st for st in published_statuses
+            if st.get("state") == "transcribing" and st.get("phase") == "decode"
+        ]
+        self.assertTrue(len(decode_statuses) > 0, "Decode statuses should be published after capture closed")
+
+        # Verify ledger has valid shown_s and revisions
+        ledger_path = voicemode_telemetry.get_ledger_path()
+        self.assertTrue(ledger_path.exists())
+        lines = [l for l in ledger_path.read_text().splitlines() if l.strip()]
+        rec = json.loads(lines[-1])
+        predicted = rec.get("predicted", {})
+        self.assertIsNotNone(predicted.get("shown_s"))
+        self.assertGreaterEqual(predicted["shown_s"], 10.0)
+
+

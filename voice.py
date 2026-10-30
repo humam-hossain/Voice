@@ -2281,6 +2281,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 return
             if not voicemode_telemetry.get_metrics_enabled():
                 return
+            if state in ("starting", "recording"):
+                deltas["eta_remaining_s"] = None
+                deltas["eta_epoch"] = None
+                deltas["eta_source"] = None
+                deltas["eta_confidence"] = None
             with status_lock:
                 s = dict(status_state)
                 s.update(deltas)
@@ -2288,7 +2293,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             pred = run_state.get("predicted")
             if pred and isinstance(pred, dict):
                 rem = s.get("eta_remaining_s")
-                if rem is not None:
+                if rem is not None and state == "transcribing":
                     if pred.get("shown_s") is None:
                         pred["shown_s"] = rem
                         pred["shown_at_epoch"] = s.get("updated_at") or time.time()
@@ -2347,6 +2352,8 @@ def run_background_recording(args: argparse.Namespace) -> int:
         }
 
         def _on_segment_yield(decoded_audio_s: float, total_audio_s: float, elapsed_decode_s: float) -> None:
+            if not capture_closed.is_set():
+                return
             try:
                 model_str = str(getattr(args, "model", "medium")).lower()
                 prefix = model_str.split(".")[0].split("-")[0]
@@ -2623,7 +2630,6 @@ def run_background_recording(args: argparse.Namespace) -> int:
             return 0
 
         write_pid_state(pid, "transcribing")
-        capture_closed.set()
         active_stage = "WAV finalization"
         try:
             live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
@@ -2652,6 +2658,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             )
         except Exception:
             pass
+        capture_closed.set()
 
         t_fin_0 = time.monotonic()
         raw_paths, duration, should_delete = recorder.stop_to_wav(args.save_dir)
