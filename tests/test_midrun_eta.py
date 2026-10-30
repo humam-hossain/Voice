@@ -385,4 +385,149 @@ class TestEtaLeakageDuringRecording(TempXdgTestCase):
         self.assertIsNotNone(predicted.get("shown_s"))
         self.assertGreaterEqual(predicted["shown_s"], 10.0)
 
+    def test_chunk_aware_remaining_eta_subtracts_pretranscribed_audio(self) -> None:
+        """When background chunks are already transcribed during recording, post-recording ETA reflects only remaining audio."""
+        args = voice.parse_args([])
+        args.no_beep = True
+        args.no_notify = True
+        args.paste = False
+
+        chunk1 = Path("/tmp/chunk1.wav")
+        chunk2 = Path("/tmp/chunk2.wav")
+
+        published_statuses: list[dict] = []
+        original_publish = voicemode_telemetry.publish_status
+
+        def tracking_publish(st):
+            published_statuses.append(dict(st))
+            return original_publish(st)
+
+        fake_recorder = MagicMock()
+        fake_recorder.recording = True
+        fake_recorder.started_at = time.monotonic() - 30.0
+        fake_recorder.on_chunk_ready = None
+        fake_recorder.chunk_audio_s = lambda idx: 5.0
+
+        def fake_load_model(call_args, force_cpu=False):
+            return MagicMock()
+
+        def fake_transcribe_timed(model_state, path, call_args, initial_prompt=None, audio_s=None, on_segment_yield=None):
+            return voice.TranscriptionEvidence(
+                text="chunk " + path.stem,
+                model_state=model_state,
+                decode_ms=20.0,
+                fallback=False,
+                failure_type=None,
+                backend="cpu, int8",
+                avg_logprob=-0.2,
+                compression_ratio=1.0,
+                no_speech_prob=0.01,
+                temperature=0.0,
+                vad_audio_s=5.0,
+                decoder_segments=1,
+                fallback_load_ms=None,
+                audio_s=audio_s or 5.0,
+            )
+
+        def fake_start():
+            if fake_recorder.on_chunk_ready:
+                # 5 chunks of 5s each (25s) are ready and transcribed during recording
+                for i in range(1, 6):
+                    fake_recorder.on_chunk_ready(i, Path(f"/tmp/chunk{i}.wav"), 5.0)
+
+        fake_recorder.start.side_effect = fake_start
+
+        def fake_stop(save_dir=None):
+            fake_recorder.recording = False
+            # 30 seconds total audio (6 chunks total, 1 remaining)
+            all_chunks = [Path(f"/tmp/chunk{i}.wav") for i in range(1, 7)]
+            return (all_chunks, 30.0, False)
+
+        fake_recorder.stop_to_wav.side_effect = fake_stop
+
+        handlers = {}
+
+        def fake_signal(sig, handler):
+            handlers[sig] = handler
+
+        def fake_sleep(duration):
+            import threading
+            threading.Event().wait(0.1)
+            if voice.signal.SIGUSR1 in handlers:
+                handlers[voice.signal.SIGUSR1](voice.signal.SIGUSR1, None)
+
+        with patch("signal.signal", side_effect=fake_signal), \
+             patch("voice.Recorder", return_value=fake_recorder), \
+             patch("voice.play_cue"), \
+             patch("voice.play_cue_async"), \
+             patch("voice.write_pid_state"), \
+             patch("voice.remove_pid"), \
+             patch("voice.load_model", side_effect=fake_load_model), \
+             patch("voice.transcribe_timed", side_effect=fake_transcribe_timed), \
+             patch("voice.time.sleep", side_effect=fake_sleep), \
+             patch("voicemode_telemetry.publish_status", side_effect=tracking_publish):
+            code = voice.run_background_recording(args)
+
+        self.assertEqual(code, 0)
+
+        ledger_path = voicemode_telemetry.get_ledger_path()
+        lines = [l for l in ledger_path.read_text().splitlines() if l.strip()]
+        rec = json.loads(lines[-1])
+        predicted = rec.get("predicted", {})
+        shown_s = predicted.get("shown_s")
+        self.assertIsNotNone(shown_s)
+        # Because 25s out of 30s were already decoded, ETA for remaining 5s should be small (<8s), NOT >= 15s!
+        self.assertLess(shown_s, 8.0, f"shown_s should reflect remaining audio (~5s), got: {shown_s}")
+        self.assertGreaterEqual(shown_s, 1.0)
+
+    def test_actual_s_measures_transcription_duration_not_recording_time(self) -> None:
+        """predicted.actual_s measures elapsed time from t_transcribe_start, while actual.total_ms measures full session."""
+        t_recording_start = 1000.0
+        t_transcribe_start = 1030.0
+        t_completion = 1032.5
+
+        clock_values = [
+            t_completion,  # total_ms calculation: time.monotonic() - t_start
+            t_completion,  # predicted.actual_s calculation: time.monotonic() - t_transcribe_start
+        ]
+
+        def fake_monotonic():
+            if clock_values:
+                return clock_values.pop(0)
+            return t_completion
+
+        run_state = {
+            "pid": 99999,
+            "t_start": t_recording_start,
+            "t_transcribe_start": t_transcribe_start,
+            "args": argparse.Namespace(),
+            "recorder": MagicMock(),
+            "wav_paths": [Path("/tmp/fake.wav")],
+            "should_delete": False,
+            "audio_s": 30.0,
+            "results": {1: MagicMock(decode_ms=500.0, failure_type=None, audio_s=5.0)},
+            "loader_state": {"load_ms": 100.0},
+            "finalize_ms": 10.0,
+            "insert_ms": 50.0,
+            "insert_ok": True,
+            "chars_typed": 10,
+            "text": "test",
+            "backend": "cpu, int8",
+            "predicted": {"shown_s": 3, "actual_s": None},
+        }
+
+        with patch("voice.time.monotonic", side_effect=fake_monotonic), \
+             patch("voicemode_telemetry.append_ledger_row") as mock_append, \
+             patch("voicemode_report.generate_prerendered_report", create=True):
+            voice.finalize_background_run(run_state, outcome="success")
+
+        # Check the record passed to append_ledger_row
+        self.assertTrue(mock_append.called)
+        record = mock_append.call_args[0][0]
+        # predicted.actual_s should be 2.5s (1032.5 - 1030.0), NOT 32.5s (1032.5 - 1000.0)!
+        self.assertAlmostEqual(record["predicted"]["actual_s"], 2.5, places=2)
+        # actual.total_ms should be 32500ms (1032.5 - 1000.0)!
+        self.assertAlmostEqual(record["actual"]["total_ms"], 32500.0, places=1)
+
+
 

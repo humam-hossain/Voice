@@ -1229,7 +1229,10 @@ def finalize_background_run(
 
                 predicted = run_state.get("predicted")
                 if predicted and isinstance(predicted, dict):
-                    if t_start is not None and predicted.get("actual_s") is None:
+                    t_transcribe_start = run_state.get("t_transcribe_start")
+                    if t_transcribe_start is not None and predicted.get("actual_s") is None:
+                        predicted["actual_s"] = round(time.monotonic() - t_transcribe_start, 3)
+                    elif t_start is not None and predicted.get("actual_s") is None:
                         predicted["actual_s"] = round(time.monotonic() - t_start, 3)
 
                 args = run_state.get("args")
@@ -2243,6 +2246,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         "insert_ms": None,
         "insert_ok": False,
         "backend": None,
+        "t_transcribe_start": None,
         "predicted": {
             "shown_s": None,
             "shown_at_epoch": None,
@@ -2630,12 +2634,20 @@ def run_background_recording(args: argparse.Namespace) -> int:
             return 0
 
         write_pid_state(pid, "transcribing")
+        run_state["t_transcribe_start"] = time.monotonic()
         active_stage = "WAV finalization"
         try:
+            with results_lock:
+                transcribed_s = sum(
+                    r.audio_s for r in results.values()
+                    if r and getattr(r, "audio_s", None)
+                )
+                done_now = len(results)
             live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
+            remaining_audio = max(0.0, live_audio - transcribed_s)
             cfg_dict = vars(args) if hasattr(args, "__dict__") else {}
             eta, src, lvl, n, conf = _compute_eta(
-                live_audio,
+                remaining_audio,
                 model=getattr(args, "model", None),
                 backend=run_state.get("backend"),
                 config=cfg_dict,
@@ -2648,7 +2660,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 "finalize",
                 audio_s=live_audio,
                 segments=segs_est,
-                segments_done=0,
+                segments_done=done_now,
                 eta_remaining_s=int(math.ceil(eta)) if eta is not None else None,
                 eta_confidence=conf or "low",
                 eta_source=src or "prior",
@@ -2676,9 +2688,16 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
         try:
             d = round(float(duration), 3)
+            with results_lock:
+                transcribed_s = sum(
+                    r.audio_s for r in results.values()
+                    if r and getattr(r, "audio_s", None)
+                )
+                done_now = len(results)
+            remaining_d = max(0.0, d - transcribed_s)
             cfg_dict = vars(args) if hasattr(args, "__dict__") else {}
             remaining, eta_source, eta_key_level, eta_n, eta_confidence = _compute_eta(
-                d,
+                remaining_d,
                 model=getattr(args, "model", None),
                 backend=run_state.get("backend"),
                 config=cfg_dict,
@@ -2690,7 +2709,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 "finalize",
                 audio_s=d,
                 segments=total_chunks,
-                segments_done=0,
+                segments_done=done_now,
                 eta_remaining_s=int(math.ceil(remaining)) if remaining is not None else None,
                 eta_confidence=eta_confidence or "low",
                 eta_source=eta_source or "prior",
