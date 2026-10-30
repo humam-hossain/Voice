@@ -86,6 +86,12 @@ None yet.
 - [Phase 9] External Quickshell/QML integration requires a UI-SPEC and coordination with the dotfiles repo; the vendored copy can drift silently.
 - [Phase 10] CUDA/AMD behavior is unverified on this machine; plan detection defensively and validate by replay.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 261030-shz | align chunk-aware remaining ETA and actual_s ledger metric | 2026-10-30 | ff782d5 | [261030-shz-align-chunk-aware-remaining-eta-and-actu](./quick/261030-shz-align-chunk-aware-remaining-eta-and-actu/) |
+
 ## Deferred Items
 
 | Category | Item | Status | Deferred At | Milestone |
