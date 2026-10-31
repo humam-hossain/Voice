@@ -1,4 +1,4 @@
-"""Accuracy & latency reporting engine for voicemode.
+"""Latency & execution performance reporting engine for voicemode.
 
 Provides tolerant JSONL ledger loading, multi-criteria filtering,
 statistics aggregation, terminal summary, canonical CSV export,
@@ -35,9 +35,9 @@ import voicemode_telemetry
 # ---------------------------------------------------------------------------
 
 CSV_HEADERS = [
-    "run_id", "timestamp", "model", "device", "audio_s", "predicted_s",
-    "actual_s", "error_s", "error_pct", "load_s", "record_s", "decode_s",
-    "finalize_s", "insert_s", "outcome", "eta_source", "confidence",
+    "run_id", "timestamp", "model", "device", "audio_s", "load_s",
+    "record_s", "decode_s", "finalize_s", "insert_s", "wait_s",
+    "rtf", "outcome",
 ]
 
 COLOR_BG = "#0f172a"
@@ -46,10 +46,10 @@ COLOR_BORDER = "#334155"
 COLOR_TEXT = "#f8fafc"
 COLOR_MUTED = "#94a3b8"
 
-# 3-tier accuracy color thresholds (D-05)
-COLOR_GREEN = "#22c55e"    # <15% error
-COLOR_AMBER = "#f59e0b"    # 15–30% error
-COLOR_CRIMSON = "#ef4444"  # >30% error or severe overrun
+# Status colors
+COLOR_GREEN = "#22c55e"
+COLOR_AMBER = "#f59e0b"
+COLOR_CRIMSON = "#ef4444"
 
 # Stage colors
 COLOR_LOAD = "#6366f1"      # Indigo
@@ -150,23 +150,33 @@ def filter_records(
     """Filters records by time window, limit count, and model/device attributes (D-14, D-16)."""
     filtered = list(records)
 
+    if since:
+        since_epoch = parse_since_argument(since)
+        if since_epoch is not None:
+            filtered = [
+                r for r in filtered
+                if (r.get("ts_start") or r.get("ts_end") or 0.0) >= since_epoch
+            ]
+
     if model:
         m_lower = model.lower()
-        filtered = [r for r in filtered if str(r.get("config", {}).get("model", "")).lower() == m_lower]
+        filtered = [
+            r for r in filtered
+            if m_lower in str((r.get("config") or {}).get("model", "")).lower()
+        ]
 
     if device:
         d_lower = device.lower()
-        filtered = [r for r in filtered if str(r.get("config", {}).get("device", "")).lower() == d_lower]
-
-    if since:
-        since_ts = parse_since_argument(since)
-        if since_ts is not None:
-            filtered = [r for r in filtered if (r.get("ts_start") or r.get("ts_end") or 0.0) >= since_ts]
+        filtered = [
+            r for r in filtered
+            if d_lower in str((r.get("config") or {}).get("device", "")).lower()
+            or d_lower in str(r.get("backend", "")).lower()
+        ]
 
     if last is not None and str(last).lower() != "all":
         try:
             limit = int(last)
-            if limit > 0:
+            if limit > 0 and len(filtered) > limit:
                 filtered = filtered[-limit:]
         except ValueError:
             pass
@@ -187,68 +197,74 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
         return default
 
 
-def extract_run_points(rec: dict) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Extracts (pred_s, act_s, error_pct) from a ledger record."""
-    pred = rec.get("predicted") or {}
+def extract_run_latency(rec: dict) -> tuple[float, float, float]:
+    """Extracts (audio_s, wait_s, rtf) from a ledger record."""
     act = rec.get("actual") or {}
+    pred = rec.get("predicted") or {}
+    audio_s = _safe_float(rec.get("audio_s"))
+    tot_s = round(_safe_float(act.get("total_ms")) / 1000.0, 3) if act.get("total_ms") is not None else None
 
-    pred_s = _safe_float(pred.get("shown_s")) if pred.get("shown_s") is not None else None
-    act_s = _safe_float(pred.get("actual_s")) if pred.get("actual_s") is not None else None
-    if act_s is None and act.get("total_ms") is not None:
-        act_s = round(_safe_float(act["total_ms"]) / 1000.0, 3)
+    # Derive wait latency (time elapsed post-recording)
+    wait_s = 0.0
+    if pred.get("actual_s") is not None:
+        wait_s = _safe_float(pred.get("actual_s"))
+    elif tot_s is not None and audio_s > 0 and tot_s > audio_s:
+        wait_s = round(tot_s - audio_s, 3)
+    elif tot_s is not None:
+        wait_s = tot_s
 
-    error_pct = None
-    if pred_s is not None and act_s is not None and act_s > 0:
-        error_pct = round(abs(pred_s - act_s) / act_s * 100.0, 1)
-
-    return pred_s, act_s, error_pct
+    decode_s = _safe_float(act.get("decode_ms")) / 1000.0 if act.get("decode_ms") is not None else 0.0
+    rtf = round(decode_s / audio_s, 2) if audio_s > 0 else 0.0
+    return audio_s, wait_s, rtf
 
 
 def compute_report_metrics(records: list[dict]) -> dict:
-    """Computes aggregate metrics: total runs, median error %, p90 latency, stage breakdowns."""
+    """Computes aggregate metrics: total runs, median wait latency, p90 latency, mean RTF, stage breakdowns."""
     total_runs = len(records)
     if total_runs == 0:
         return {
             "total_runs": 0,
-            "median_error_pct": None,
+            "median_wait_s": None,
             "p90_latency_s": None,
-            "calibration_tier": "prior",
+            "mean_rtf": None,
             "last_run_timestamp": None,
-            "overrun_count": 0,
             "stage_medians": {},
             "stage_p90s": {},
         }
 
-    error_pcts: list[float] = []
-    latencies: list[float] = []
+    wait_latencies: list[float] = []
+    rtf_vals: list[float] = []
     load_vals: list[float] = []
     decode_vals: list[float] = []
     finalize_vals: list[float] = []
     insert_vals: list[float] = []
-    overrun_count = 0
 
     for r in records:
-        pred_s, act_s, err_pct = extract_run_points(r)
-        if pred_s is not None and act_s is not None and act_s > 0:
-            error_pcts.append(err_pct)
-            if pred_s < act_s:
-                overrun_count += 1
+        audio_s, wait_s, rtf = extract_run_latency(r)
+        if wait_s > 0:
+            wait_latencies.append(wait_s)
 
         act = r.get("actual") or {}
-        if act_s is not None:
-            latencies.append(act_s)
+        load_s = _safe_float(act.get("load_ms")) / 1000.0 if act.get("load_ms") is not None else 0.0
+        decode_s = _safe_float(act.get("decode_ms")) / 1000.0 if act.get("decode_ms") is not None else 0.0
+        fin_s = _safe_float(act.get("finalize_ms")) / 1000.0 if act.get("finalize_ms") is not None else 0.0
+        ins_s = _safe_float(act.get("insert_ms")) / 1000.0 if act.get("insert_ms") is not None else 0.0
 
         if act.get("load_ms") is not None:
-            load_vals.append(_safe_float(act["load_ms"]) / 1000.0)
+            load_vals.append(load_s)
         if act.get("decode_ms") is not None:
-            decode_vals.append(_safe_float(act["decode_ms"]) / 1000.0)
+            decode_vals.append(decode_s)
         if act.get("finalize_ms") is not None:
-            finalize_vals.append(_safe_float(act["finalize_ms"]) / 1000.0)
+            finalize_vals.append(fin_s)
         if act.get("insert_ms") is not None:
-            insert_vals.append(_safe_float(act["insert_ms"]) / 1000.0)
+            insert_vals.append(ins_s)
 
-    median_error_pct = round(statistics.median(error_pcts), 1) if error_pcts else None
-    p90_latency_s = _percentile(latencies, 0.90) if latencies else None
+        if audio_s > 0 and decode_s > 0:
+            rtf_vals.append(round(decode_s / audio_s, 3))
+
+    median_wait_s = round(statistics.median(wait_latencies), 3) if wait_latencies else None
+    p90_latency_s = _percentile(wait_latencies, 0.90) if wait_latencies else None
+    mean_rtf = round(statistics.mean(rtf_vals), 3) if rtf_vals else None
 
     stage_medians: dict[str, float] = {}
     stage_p90s: dict[str, float] = {}
@@ -257,21 +273,6 @@ def compute_report_metrics(records: list[dict]) -> dict:
         if vals:
             stage_medians[name] = round(statistics.median(vals), 3)
             stage_p90s[name] = _percentile(vals, 0.90)
-
-    try:
-        cal = voicemode_telemetry.load_calibration()
-        cal_tier = "prior"
-        accs = cal.get("accumulators", {})
-        for tier in ("L0", "L1", "L2"):
-            tier_map = accs.get(tier, {})
-            for entry in tier_map.values():
-                if isinstance(entry, dict) and entry.get("n", 0) >= 3:
-                    cal_tier = tier
-                    break
-            if cal_tier != "prior":
-                break
-    except Exception:
-        cal_tier = "prior"
 
     last_ts = None
     for r in reversed(records):
@@ -282,11 +283,10 @@ def compute_report_metrics(records: list[dict]) -> dict:
 
     return {
         "total_runs": total_runs,
-        "median_error_pct": median_error_pct,
+        "median_wait_s": median_wait_s,
         "p90_latency_s": p90_latency_s,
-        "calibration_tier": cal_tier,
+        "mean_rtf": mean_rtf,
         "last_run_timestamp": last_ts,
-        "overrun_count": overrun_count,
         "stage_medians": stage_medians,
         "stage_p90s": stage_p90s,
     }
@@ -303,26 +303,14 @@ def _percentile(values: list[float], pct: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# CSV Export (D-11, RPT-05)
+# CSV Export
 # ---------------------------------------------------------------------------
 
 def record_to_csv_row(rec: dict) -> dict[str, Any]:
     """Extracts a flat row from a ledger record for CSV export."""
-    pred = rec.get("predicted") or {}
     act = rec.get("actual") or {}
     cfg = rec.get("config") or {}
-
-    audio_s = _safe_float(rec.get("audio_s"))
-    pred_s = float(pred["shown_s"]) if pred.get("shown_s") is not None else None
-
-    act_s = None
-    if pred.get("actual_s") is not None:
-        act_s = float(pred["actual_s"])
-    elif act.get("total_ms") is not None:
-        act_s = round(_safe_float(act["total_ms"]) / 1000.0, 3)
-
-    error_s = round(pred_s - act_s, 3) if pred_s is not None and act_s is not None else None
-    error_pct = round(abs(error_s) / act_s * 100.0, 1) if error_s is not None and act_s and act_s > 0 else None
+    audio_s, wait_s, rtf = extract_run_latency(rec)
 
     ts = rec.get("ts_start") or rec.get("ts_end") or 0.0
     ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
@@ -333,23 +321,19 @@ def record_to_csv_row(rec: dict) -> dict[str, Any]:
         "model": cfg.get("model") or "",
         "device": cfg.get("device") or "",
         "audio_s": audio_s,
-        "predicted_s": pred_s if pred_s is not None else "",
-        "actual_s": act_s if act_s is not None else "",
-        "error_s": error_s if error_s is not None else "",
-        "error_pct": error_pct if error_pct is not None else "",
         "load_s": round(_safe_float(act.get("load_ms")) / 1000.0, 3) if act.get("load_ms") is not None else 0.0,
         "record_s": audio_s,
         "decode_s": round(_safe_float(act.get("decode_ms")) / 1000.0, 3) if act.get("decode_ms") is not None else 0.0,
         "finalize_s": round(_safe_float(act.get("finalize_ms")) / 1000.0, 3) if act.get("finalize_ms") is not None else 0.0,
         "insert_s": round(_safe_float(act.get("insert_ms")) / 1000.0, 3) if act.get("insert_ms") is not None else 0.0,
+        "wait_s": wait_s,
+        "rtf": rtf,
         "outcome": rec.get("outcome") or "unknown",
-        "eta_source": pred.get("source") or "",
-        "confidence": pred.get("confidence") or "",
     }
 
 
 def render_csv(records: list[dict]) -> str:
-    """Exports records to CSV with exact 17 canonical headers (D-11, RPT-05)."""
+    """Exports records to CSV with canonical latency headers."""
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=CSV_HEADERS, lineterminator="\n")
     writer.writeheader()
@@ -359,7 +343,7 @@ def render_csv(records: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# JSON Export (D-12, RPT-05)
+# JSON Export
 # ---------------------------------------------------------------------------
 
 def _get_ledger_info() -> dict:
@@ -377,13 +361,13 @@ def _get_ledger_info() -> dict:
 
 
 def render_json(metrics: dict, ledger_info: dict) -> str:
-    """Converged JSON schema contract for --metrics --json and --report --format json (D-12, RPT-05)."""
+    """Converged JSON schema contract for --metrics --json and --report --format json."""
     payload = {
         "summary": {
             "total_runs": metrics.get("total_runs", 0),
-            "median_error_pct": metrics.get("median_error_pct"),
+            "median_wait_s": metrics.get("median_wait_s"),
             "p90_latency_s": metrics.get("p90_latency_s"),
-            "calibration_tier": metrics.get("calibration_tier", "prior"),
+            "mean_rtf": metrics.get("mean_rtf"),
             "last_run_timestamp": metrics.get("last_run_timestamp"),
         },
         "ledger": {
@@ -398,7 +382,7 @@ def render_json(metrics: dict, ledger_info: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Terminal Summary (D-09)
+# Terminal Summary
 # ---------------------------------------------------------------------------
 
 def render_terminal_summary(
@@ -406,25 +390,24 @@ def render_terminal_summary(
     metrics: dict,
     skipped_count: int = 0,
 ) -> str:
-    """Formats CLI summary card with aggregate metrics and recent runs table (D-09)."""
+    """Formats CLI summary card with aggregate metrics and recent runs table."""
     lines: list[str] = []
 
     total = metrics.get("total_runs", 0)
-    med_err = metrics.get("median_error_pct")
+    med_wait = metrics.get("median_wait_s")
     p90 = metrics.get("p90_latency_s")
-    cal_tier = metrics.get("calibration_tier", "prior")
-    overrun = metrics.get("overrun_count", 0)
+    rtf = metrics.get("mean_rtf")
 
     lines.append("╔══════════════════════════════════════════════════╗")
-    lines.append("║            Voice Accuracy Report                 ║")
+    lines.append("║             Voice Latency Report                 ║")
     lines.append("╠══════════════════════════════════════════════════╣")
     lines.append(f"║  Total Runs:      {total:<30}║")
-    med_str = f"{med_err:.1f}%" if med_err is not None else "N/A"
-    lines.append(f"║  Median Error:    {med_str:<30}║")
+    med_str = f"{med_wait:.3f}s" if med_wait is not None else "N/A"
+    lines.append(f"║  Median Wait:     {med_str:<30}║")
     p90_str = f"{p90:.3f}s" if p90 is not None else "N/A"
     lines.append(f"║  P90 Latency:     {p90_str:<30}║")
-    lines.append(f"║  Calibration:     {cal_tier:<30}║")
-    lines.append(f"║  Overruns:        {overrun:<30}║")
+    rtf_str = f"{rtf:.3f}x" if rtf is not None else "N/A"
+    lines.append(f"║  Mean RTF:        {rtf_str:<30}║")
     if skipped_count > 0:
         lines.append(f"║  Skipped Rows:    {skipped_count:<30}║")
     lines.append("╚══════════════════════════════════════════════════╝")
@@ -437,7 +420,7 @@ def render_terminal_summary(
         return "\n".join(lines)
 
     lines.append("")
-    header = f"{'RUN_ID':<14} {'DATE/TIME':<20} {'AUDIO':>6} {'PRED':>6} {'ACTUAL':>6} {'ERR%':>6} {'STATUS':<8} {'L/D/F/I'}"
+    header = f"{'RUN_ID':<14} {'DATE/TIME':<17} {'AUDIO':>7} {'WAIT_S':>7} {'RTF':>7} {'STATUS':<8} {'LOAD / DECODE / FIN / INS'}"
     lines.append(header)
     lines.append("─" * len(header))
 
@@ -447,9 +430,7 @@ def render_terminal_summary(
         ts = r.get("ts_start") or r.get("ts_end") or 0.0
         dt_str = time.strftime("%Y-%m-%d %H:%M", time.gmtime(ts)) if ts else "N/A"
 
-        audio_s = _safe_float(r.get("audio_s"))
-        pred_s, act_s, err_pct = extract_run_points(r)
-        err_str = f"{err_pct:.1f}%" if err_pct is not None else "N/A"
+        audio_s, wait_s, rtf_val = extract_run_latency(r)
 
         act = r.get("actual") or {}
         outcome = r.get("outcome", "?")[:7]
@@ -457,15 +438,15 @@ def render_terminal_summary(
         decode_s = _safe_float(act.get("decode_ms")) / 1000.0 if act.get("decode_ms") is not None else 0.0
         fin_s = _safe_float(act.get("finalize_ms")) / 1000.0 if act.get("finalize_ms") is not None else 0.0
         ins_s = _safe_float(act.get("insert_ms")) / 1000.0 if act.get("insert_ms") is not None else 0.0
-        stages = f"{load_s:.2f}/{decode_s:.2f}/{fin_s:.2f}/{ins_s:.2f}"
+        stages = f"{load_s:.2f} / {decode_s:.2f} / {fin_s:.2f} / {ins_s:.2f}"
 
-        audio_str = f"{audio_s:.1f}" if audio_s else "N/A"
-        pred_str = f"{pred_s:.2f}" if pred_s is not None else "N/A"
-        act_str = f"{act_s:.2f}" if act_s is not None else "N/A"
+        audio_str = f"{audio_s:.1f}s" if audio_s else "N/A"
+        wait_str = f"{wait_s:.2f}s" if wait_s else "N/A"
+        rtf_str = f"{rtf_val:.2f}x" if rtf_val else "N/A"
 
         lines.append(
-            f"{run_id:<14} {dt_str:<20} {audio_str:>6} {pred_str:>6} {act_str:>6} "
-            f"{err_str:>6} {outcome:<8} {stages}"
+            f"{run_id:<14} {dt_str:<17} {audio_str:>7} {wait_str:>7} {rtf_str:>7} "
+            f"{outcome:<8} {stages}"
         )
 
     report_path = voicemode_telemetry.get_state_dir() / "report.html"
@@ -475,11 +456,11 @@ def render_terminal_summary(
 
 
 # ---------------------------------------------------------------------------
-# Fluid Responsive Inline SVG Charts (D-02, D-03, D-04, D-05)
+# Fluid Responsive Inline SVG Charts
 # ---------------------------------------------------------------------------
 
-def render_scatter_svg(records: list[dict], metrics: dict) -> str:
-    """Predicted vs Actual scatter plot with 45° diagonal dashed line (D-02, D-03, D-05)."""
+def render_latency_scatter_svg(records: list[dict], metrics: dict) -> str:
+    """Audio duration vs Wait latency scatter plot."""
     w, h = 500, 320
     pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
     plot_w = w - pad_l - pad_r
@@ -487,49 +468,35 @@ def render_scatter_svg(records: list[dict], metrics: dict) -> str:
 
     valid_pts = []
     for r in records:
-        p, a, err = extract_run_points(r)
-        if p is not None and a is not None and a > 0:
-            valid_pts.append((p, a, err, str(r.get("run_id", ""))))
+        aud, wait, _ = extract_run_latency(r)
+        if aud > 0 and wait > 0:
+            valid_pts.append((aud, wait, str(r.get("run_id", ""))))
 
-    max_val = 5.0
-    if valid_pts:
-        max_p = max(p for p, _, _, _ in valid_pts)
-        max_a = max(a for _, a, _, _ in valid_pts)
-        max_val = max(1.0, max(max_p, max_a))
-    max_val = max(1.0, round(max_val * 1.1, 1))
+    max_x = max(10.0, max((x for x, _, _ in valid_pts), default=30.0)) * 1.1
+    max_y = max(5.0, max((y for _, y, _ in valid_pts), default=10.0)) * 1.1
 
-    # Gridlines and axes
     elements = []
     for step in (0.25, 0.5, 0.75, 1.0):
-        val = max_val * step
+        vx = max_x * step
+        vy = max_y * step
         x = pad_l + step * plot_w
         y = pad_t + plot_h - step * plot_h
         elements.append(f'<line x1="{x:.1f}" y1="{pad_t}" x2="{x:.1f}" y2="{pad_t + plot_h}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.4" />')
         elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.4" />')
-        elements.append(f'<text x="{x:.1f}" y="{pad_t + plot_h + 16}" fill="{COLOR_MUTED}" font-size="10" text-anchor="middle">{val:.1f}s</text>')
-        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val:.1f}s</text>')
+        elements.append(f'<text x="{x:.1f}" y="{pad_t + plot_h + 16}" fill="{COLOR_MUTED}" font-size="10" text-anchor="middle">{vx:.0f}s</text>')
+        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{vy:.1f}s</text>')
 
-    # 45-degree diagonal line: y = x (Ideal prediction)
-    elements.append(
-        f'<line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{pad_l + plot_w}" y2="{pad_t}" '
-        f'stroke="#475569" stroke-dasharray="4,4" stroke-width="1.5">'
-        f'<title>Ideal Prediction (1:1 diagonal)</title></line>'
-    )
-
-    # Data points
-    for p, a, err, rid in valid_pts:
-        cx = pad_l + (min(a, max_val) / max_val) * plot_w
-        cy = pad_t + plot_h - (min(p, max_val) / max_val) * plot_h
-        color = COLOR_GREEN if err < 15.0 else (COLOR_AMBER if err <= 30.0 else COLOR_CRIMSON)
+    for aud, wait, rid in valid_pts:
+        cx = pad_l + (min(aud, max_x) / max_x) * plot_w
+        cy = pad_t + plot_h - (min(wait, max_y) / max_y) * plot_h
         elements.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{color}" opacity="0.85" class="chart-dot">'
-            f'<title>Run {html.escape(rid)}: Pred {p:.2f}s, Actual {a:.2f}s ({err:.1f}% error)</title>'
+            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="#38bdf8" opacity="0.85" class="chart-dot">'
+            f'<title>Run {html.escape(rid)}: Audio {aud:.1f}s, Wait {wait:.2f}s</title>'
             f'</circle>'
         )
 
-    # Axis titles
-    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Actual Latency (s)</text>')
-    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Predicted (s)</text>')
+    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Audio Duration (s)</text>')
+    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Wait Latency (s)</text>')
 
     return (
         f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
@@ -539,8 +506,8 @@ def render_scatter_svg(records: list[dict], metrics: dict) -> str:
     )
 
 
-def render_trend_svg(records: list[dict], metrics: dict) -> str:
-    """Error % Over Time trend curve with 15% and 30% reference lines (D-02, D-05)."""
+def render_rtf_trend_svg(records: list[dict], metrics: dict) -> str:
+    """Real-Time Factor (RTF) trend curve across chronological runs."""
     w, h = 500, 320
     pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
     plot_w = w - pad_l - pad_r
@@ -548,54 +515,44 @@ def render_trend_svg(records: list[dict], metrics: dict) -> str:
 
     pts = []
     for i, r in enumerate(records):
-        _, _, err = extract_run_points(r)
-        if err is not None:
-            pts.append((str(r.get("run_id", f"run-{i}")), err))
+        aud, _, rtf = extract_run_latency(r)
+        if aud > 0 and rtf > 0:
+            pts.append((str(r.get("run_id", f"run-{i}")), rtf))
 
-    max_err = 50.0
+    max_rtf = 1.5
     if pts:
-        max_e = max(err for _, err in pts)
-        max_err = max(50.0, max_e * 1.1)
-    max_err = min(200.0, max_err)
+        max_r = max(r for _, r in pts)
+        max_rtf = max(1.5, max_r * 1.1)
 
     elements = []
-    # Gridlines
     for step in (0.25, 0.5, 0.75, 1.0):
-        val = max_err * step
+        val = max_rtf * step
         y = pad_t + plot_h - step * plot_h
         elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.3" />')
-        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val:.0f}%</text>')
+        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val:.2f}x</text>')
 
-    # 15% and 30% tolerance threshold lines
-    y_15 = pad_t + plot_h - (15.0 / max_err) * plot_h
-    elements.append(
-        f'<line x1="{pad_l}" y1="{y_15:.1f}" x2="{pad_l + plot_w}" y2="{y_15:.1f}" '
-        f'stroke="{COLOR_GREEN}" stroke-dasharray="3,3" opacity="0.7">'
-        f'<title>15% Tolerance Threshold</title></line>'
-        f'<text x="{pad_l + plot_w - 4}" y="{y_15 - 4:.1f}" fill="{COLOR_GREEN}" font-size="10" text-anchor="end">15%</text>'
-    )
+    # 1.0x real-time boundary line
+    if 1.0 <= max_rtf:
+        y_1 = pad_t + plot_h - (1.0 / max_rtf) * plot_h
+        elements.append(
+            f'<line x1="{pad_l}" y1="{y_1:.1f}" x2="{pad_l + plot_w}" y2="{y_1:.1f}" '
+            f'stroke="{COLOR_AMBER}" stroke-dasharray="3,3" opacity="0.7">'
+            f'<title>1.0x Real-Time Threshold</title></line>'
+            f'<text x="{pad_l + plot_w - 4}" y="{y_1 - 4:.1f}" fill="{COLOR_AMBER}" font-size="10" text-anchor="end">1.0x</text>'
+        )
 
-    y_30 = pad_t + plot_h - (30.0 / max_err) * plot_h
-    elements.append(
-        f'<line x1="{pad_l}" y1="{y_30:.1f}" x2="{pad_l + plot_w}" y2="{y_30:.1f}" '
-        f'stroke="{COLOR_AMBER}" stroke-dasharray="3,3" opacity="0.7">'
-        f'<title>30% Warning Threshold</title></line>'
-        f'<text x="{pad_l + plot_w - 4}" y="{y_30 - 4:.1f}" fill="{COLOR_AMBER}" font-size="10" text-anchor="end">30%</text>'
-    )
-
-    # Polyline and data points
     if pts:
         coords = []
         dots = []
         n = len(pts)
-        for i, (rid, err) in enumerate(pts):
+        for i, (rid, rtf) in enumerate(pts):
             cx = pad_l + (plot_w / 2 if n == 1 else (i / (n - 1)) * plot_w)
-            cy = pad_t + plot_h - (min(err, max_err) / max_err) * plot_h
+            cy = pad_t + plot_h - (min(rtf, max_rtf) / max_rtf) * plot_h
             coords.append(f"{cx:.1f},{cy:.1f}")
-            color = COLOR_GREEN if err < 15.0 else (COLOR_AMBER if err <= 30.0 else COLOR_CRIMSON)
+            color = COLOR_GREEN if rtf < 1.0 else COLOR_AMBER
             dots.append(
                 f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{color}" class="chart-dot">'
-                f'<title>Run {html.escape(rid)}: Error {err:.1f}%</title>'
+                f'<title>Run {html.escape(rid)}: RTF {rtf:.2f}x</title>'
                 f'</circle>'
             )
 
@@ -603,76 +560,7 @@ def render_trend_svg(records: list[dict], metrics: dict) -> str:
         elements.extend(dots)
 
     elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Chronological Runs</text>')
-    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Error %</text>')
-
-    return (
-        f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
-        f'style="width: 100%; height: auto; max-width: 100%; display: block;">'
-        f'{"".join(elements)}'
-        f'</svg>'
-    )
-
-
-def render_histogram_svg(records: list[dict], metrics: dict) -> str:
-    """Residual error |pred - actual| histogram across 8 bins (D-02, D-05)."""
-    w, h = 500, 320
-    pad_l, pad_b, pad_t, pad_r = 50, 40, 20, 20
-    plot_w = w - pad_l - pad_r
-    plot_h = h - pad_t - pad_b
-
-    bin_edges = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, float("inf")]
-    bin_labels = ["0-0.25s", "0.25-0.5s", "0.5-0.75s", "0.75-1s", "1-1.5s", "1.5-2s", "2-3s", ">3s"]
-    counts = [0] * len(bin_edges)
-
-    for r in records:
-        p, a, _ = extract_run_points(r)
-        if p is not None and a is not None:
-            residual = abs(p - a)
-            for idx, edge in enumerate(bin_edges):
-                if residual <= edge:
-                    counts[idx] += 1
-                    break
-
-    max_c = max(1, max(counts))
-    total_valid = sum(counts)
-    elements = []
-
-    # Y-axis ticks
-    for step in (0.5, 1.0):
-        val = int(max_c * step)
-        y = pad_t + plot_h - step * plot_h
-        elements.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="{COLOR_BORDER}" stroke-dasharray="2,2" opacity="0.3" />')
-        elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{val}</text>')
-
-    bar_gap = 6
-    num_bins = len(bin_labels)
-    bar_w = (plot_w - (num_bins + 1) * bar_gap) / num_bins
-
-    for idx, (label, count) in enumerate(zip(bin_labels, counts)):
-        bx = pad_l + bar_gap + idx * (bar_w + bar_gap)
-        bar_h = (count / max_c) * plot_h
-        by = pad_t + plot_h - bar_h
-
-        # 3-tier colors for residual magnitudes
-        if idx < 2:
-            color = COLOR_GREEN
-        elif idx < 4:
-            color = COLOR_AMBER
-        else:
-            color = COLOR_CRIMSON
-
-        pct = (count / total_valid * 100.0) if total_valid > 0 else 0.0
-        elements.append(
-            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" fill="{color}" rx="3" opacity="0.85">'
-            f'<title>Bin {label}: {count} runs ({pct:.1f}%)</title>'
-            f'</rect>'
-        )
-        elements.append(
-            f'<text x="{bx + bar_w / 2:.1f}" y="{pad_t + plot_h + 14}" fill="{COLOR_MUTED}" font-size="9" text-anchor="middle">{label}</text>'
-        )
-
-    elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Residual Magnitude |Pred - Actual|</text>')
-    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Runs</text>')
+    elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">RTF (decode/audio)</text>')
 
     return (
         f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" '
@@ -692,7 +580,6 @@ def render_stage_bars_svg(records: list[dict], metrics: dict) -> str:
     recent = records[-7:] if records else []
     elements = []
 
-    # Legend at top
     legend_items = [
         ("Load", COLOR_LOAD),
         ("Decode", COLOR_DECODE),
@@ -709,7 +596,6 @@ def render_stage_bars_svg(records: list[dict], metrics: dict) -> str:
         elements.append(f'<text x="{w / 2}" y="{h / 2}" fill="{COLOR_MUTED}" font-size="12" text-anchor="middle">No stage data available</text>')
         return f'<svg viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" style="width: 100%; height: auto; max-width: 100%; display: block;">{"".join(elements)}</svg>'
 
-    # Find max total latency among recent runs
     max_tot = 1.0
     for r in recent:
         act = r.get("actual") or {}
@@ -762,18 +648,18 @@ def render_stage_bars_svg(records: list[dict], metrics: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Visual Onboarding Empty State & Ghost Charts (D-08, RPT-03)
+# Visual Onboarding Empty State
 # ---------------------------------------------------------------------------
 
 def render_ghost_charts_svg() -> str:
-    """Renders dashed ghost chart outlines for visual onboarding (D-08, RPT-03)."""
+    """Renders dashed ghost chart outlines for visual onboarding."""
     return (
         '<div class="ghost-grid">'
         '<div class="ghost-chart">'
         '<svg viewBox="0 0 500 240" style="width:100%;height:auto;display:block;">'
         '<rect x="20" y="20" width="460" height="200" fill="none" stroke="#334155" stroke-dasharray="6,6" rx="8" />'
         '<line x1="60" y1="180" x2="440" y2="60" stroke="#334155" stroke-dasharray="4,4" opacity="0.5" />'
-        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Predicted vs Actual Latency</text>'
+        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Stage Latency Breakdown</text>'
         '<text x="250" y="140" fill="#475569" font-size="12" text-anchor="middle">Populates after your first dictation</text>'
         '</svg>'
         '</div>'
@@ -781,8 +667,8 @@ def render_ghost_charts_svg() -> str:
         '<svg viewBox="0 0 500 240" style="width:100%;height:auto;display:block;">'
         '<rect x="20" y="20" width="460" height="200" fill="none" stroke="#334155" stroke-dasharray="6,6" rx="8" />'
         '<line x1="60" y1="140" x2="440" y2="140" stroke="#334155" stroke-dasharray="4,4" opacity="0.5" />'
-        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Error % Over Time</text>'
-        '<text x="250" y="140" fill="#475569" font-size="12" text-anchor="middle">Tracks calibration convergence</text>'
+        '<text x="250" y="115" fill="#64748b" font-size="14" text-anchor="middle">Real-Time Factor Trend</text>'
+        '<text x="250" y="140" fill="#475569" font-size="12" text-anchor="middle">Tracks Whisper decode efficiency</text>'
         '</svg>'
         '</div>'
         '</div>'
@@ -790,16 +676,15 @@ def render_ghost_charts_svg() -> str:
 
 
 def render_empty_state_card() -> str:
-    """Visual onboarding card explaining calibration and prompting shortcut (D-08)."""
+    """Visual onboarding card explaining chunk-streaming latency."""
     ghost = render_ghost_charts_svg()
     return f"""
     <div class="empty-state">
       <div class="onboarding-card">
         <h2>No recordings yet</h2>
         <p class="onboarding-desc">
-          Voicemode predicts transcription latency locally using online calibration.
-          As you speak, predictions adapt to your hardware across 3 confidence tiers:
-          <strong>Prior &rarr; L0 (audio duration) &rarr; L1 (device) &rarr; L2 (model & compute type)</strong>.
+          Voicemode logs transcription stage latencies locally for privacy-preserving diagnostics.
+          As you speak, audio is processed in continuous 5-second streaming chunks, keeping post-recording wait latency minimal and predictable.
         </p>
         <div class="shortcut-box">
           Press <kbd>SUPER+SHIFT+M</kbd> to record your first dictation
@@ -811,11 +696,11 @@ def render_empty_state_card() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Privacy Footer (D-07, RPT-03)
+# Privacy Footer
 # ---------------------------------------------------------------------------
 
 def render_privacy_footer(metrics_path: Optional[Path] = None, skipped_count: int = 0) -> str:
-    """Renders structured 4-subpanel privacy card with explicit purge commands (D-07)."""
+    """Renders structured 4-subpanel privacy card with explicit purge commands."""
     if metrics_path is None:
         metrics_path = voicemode_telemetry.get_ledger_path()
     path_str = html.escape(str(metrics_path))
@@ -849,11 +734,9 @@ def render_privacy_footer(metrics_path: Optional[Path] = None, skipped_count: in
           <p>Transcript insertion simulates native Wayland keystrokes or uses system clipboard paste. Active clipboard text is never logged or stored in telemetry.</p>
         </div>
         <div class="privacy-subpanel">
-          <h4>4. Purge & Reset</h4>
+          <h4>4. Purge History</h4>
           <p>To purge all history:</p>
           <code>rm {path_str}</code>
-          <p style="margin-top:8px;">To reset calibration to priors:</p>
-          <code>voice --reset-calibration</code>
         </div>
       </div>
       {warning_html}
@@ -862,11 +745,11 @@ def render_privacy_footer(metrics_path: Optional[Path] = None, skipped_count: in
 
 
 # ---------------------------------------------------------------------------
-# Recent Runs Table (D-06, D-05)
+# Recent Runs Table
 # ---------------------------------------------------------------------------
 
 def render_runs_table(records: list[dict]) -> str:
-    """Renders recent runs table (up to 200, 25 visible, CSS scrollable) with 3-tier badges."""
+    """Renders recent runs table (up to 200, CSS scrollable)."""
     if not records:
         return '<div class="table-empty">No runs recorded yet. Dictate your first sentence to populate this ledger.</div>'
 
@@ -878,19 +761,7 @@ def render_runs_table(records: list[dict]) -> str:
 
         cfg = r.get("config") or {}
         model = html.escape(str(cfg.get("model", "unknown")))
-        audio_s = _safe_float(r.get("audio_s"))
-
-        pred_s, act_s, err_pct = extract_run_points(r)
-        if err_pct is not None:
-            if err_pct < 15.0:
-                badge_cls = "badge-green"
-            elif err_pct <= 30.0:
-                badge_cls = "badge-amber"
-            else:
-                badge_cls = "badge-crimson"
-            err_badge = f'<span class="badge {badge_cls}">{err_pct:.1f}%</span>'
-        else:
-            err_badge = '<span class="badge badge-muted">N/A</span>'
+        audio_s, wait_s, rtf_val = extract_run_latency(r)
 
         outcome = html.escape(str(r.get("outcome", "unknown")))
         act = r.get("actual") or {}
@@ -899,18 +770,14 @@ def render_runs_table(records: list[dict]) -> str:
         fin_s = _safe_float(act.get("finalize_ms")) / 1000.0 if act.get("finalize_ms") is not None else 0.0
         ins_s = _safe_float(act.get("insert_ms")) / 1000.0 if act.get("insert_ms") is not None else 0.0
 
-        p_str = f"{pred_s:.2f}s" if pred_s is not None else "-"
-        a_str = f"{act_s:.2f}s" if act_s is not None else "-"
-
         rows_html.append(
             f'<tr>'
             f'<td><code>{run_id}</code></td>'
             f'<td>{dt_str}</td>'
             f'<td>{model}</td>'
             f'<td>{audio_s:.1f}s</td>'
-            f'<td>{p_str}</td>'
-            f'<td>{a_str}</td>'
-            f'<td>{err_badge}</td>'
+            f'<td>{wait_s:.2f}s</td>'
+            f'<td>{rtf_val:.2f}x</td>'
             f'<td><small>{load_s:.2f}/{decode_s:.2f}/{fin_s:.2f}/{ins_s:.2f}</small></td>'
             f'<td>{outcome}</td>'
             f'</tr>'
@@ -925,9 +792,8 @@ def render_runs_table(records: list[dict]) -> str:
             <th>Date/Time</th>
             <th>Model</th>
             <th>Audio</th>
-            <th>Predicted</th>
-            <th>Actual</th>
-            <th>Error%</th>
+            <th>Wait</th>
+            <th>RTF</th>
             <th>Stages (L/D/F/I)</th>
             <th>Outcome</th>
           </tr>
@@ -941,7 +807,7 @@ def render_runs_table(records: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Standalone HTML Document Generator (D-01, D-02, D-03, RPT-02)
+# Standalone HTML Document Generator
 # ---------------------------------------------------------------------------
 
 CSS_STYLES = """
@@ -1007,10 +873,6 @@ body {
 .runs-table td { padding: 8px 14px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
 .runs-table tr:hover td { background: rgba(51, 65, 85, 0.4); }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 0.75rem; }
-.badge-green { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
-.badge-amber { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
-.badge-crimson { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
-.badge-muted { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
 .privacy-card {
   background: #1e293b;
   border: 1px solid #334155;
@@ -1044,14 +906,15 @@ def render_html_report(
     skipped_count: int = 0,
     metrics_path: Optional[Path] = None,
 ) -> str:
-    """Generates the self-contained, zero-JavaScript dark HTML dashboard (D-01, D-02, D-03, RPT-02)."""
+    """Generates the self-contained, zero-JavaScript dark HTML dashboard."""
     total = metrics.get("total_runs", 0)
-    med_err = metrics.get("median_error_pct")
+    med_wait = metrics.get("median_wait_s")
     p90 = metrics.get("p90_latency_s")
-    cal_tier = metrics.get("calibration_tier", "prior")
+    rtf = metrics.get("mean_rtf")
 
-    med_str = f"{med_err:.1f}%" if med_err is not None else "N/A"
+    med_str = f"{med_wait:.2f}s" if med_wait is not None else "N/A"
     p90_str = f"{p90:.2f}s" if p90 is not None else "N/A"
+    rtf_str = f"{rtf:.2f}x" if rtf is not None else "N/A"
 
     hero_cards_html = f"""
     <div class="hero-grid">
@@ -1060,7 +923,7 @@ def render_html_report(
         <div class="value">{total}</div>
       </div>
       <div class="card hero-card">
-        <div class="label">Median Error</div>
+        <div class="label">Median Wait</div>
         <div class="value">{med_str}</div>
       </div>
       <div class="card hero-card">
@@ -1068,8 +931,8 @@ def render_html_report(
         <div class="value">{p90_str}</div>
       </div>
       <div class="card hero-card">
-        <div class="label">Calibration Tier</div>
-        <div class="value">{html.escape(cal_tier)}</div>
+        <div class="label">Mean RTF</div>
+        <div class="value">{rtf_str}</div>
       </div>
     </div>
     """
@@ -1077,26 +940,21 @@ def render_html_report(
     if total == 0:
         main_content = render_empty_state_card()
     else:
-        scatter_svg = render_scatter_svg(records, metrics)
-        trend_svg = render_trend_svg(records, metrics)
-        hist_svg = render_histogram_svg(records, metrics)
+        scatter_svg = render_latency_scatter_svg(records, metrics)
+        trend_svg = render_rtf_trend_svg(records, metrics)
         stage_svg = render_stage_bars_svg(records, metrics)
 
         charts_html = f"""
         <div class="chart-grid">
           <div class="card chart-card">
-            <h3>Predicted vs Actual Latency (1:1 Diagonal)</h3>
+            <h3>Audio Duration vs Post-Recording Wait Latency</h3>
             {scatter_svg}
           </div>
           <div class="card chart-card">
-            <h3>Error % Over Time (Tolerance Thresholds)</h3>
+            <h3>Real-Time Factor (RTF) Over Time</h3>
             {trend_svg}
           </div>
-          <div class="card chart-card">
-            <h3>Residual Error Distribution |Pred - Actual|</h3>
-            {hist_svg}
-          </div>
-          <div class="card chart-card">
+          <div class="card chart-card" style="grid-column: 1 / -1;">
             <h3>Stage Timing Breakdown (Load / Decode / Finalize / Insert)</h3>
             {stage_svg}
           </div>
@@ -1112,7 +970,7 @@ def render_html_report(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voicemode Accuracy Report</title>
+  <title>Voicemode Latency Report</title>
   <style>
 {CSS_STYLES}
   </style>
@@ -1120,8 +978,8 @@ def render_html_report(
 <body>
   <div class="header">
     <div>
-      <h1>Voicemode Accuracy Report</h1>
-      <div class="tagline">Local Telemetry & Calibration Dashboard • Arch Linux / Hyprland</div>
+      <h1>Voicemode Latency Report</h1>
+      <div class="tagline">Local Stage Latency & Telemetry Dashboard • Arch Linux / Hyprland</div>
     </div>
   </div>
   {hero_cards_html}
@@ -1132,11 +990,11 @@ def render_html_report(
 
 
 # ---------------------------------------------------------------------------
-# Pre-Render Hook (D-18, D-19, D-20)
+# Pre-Render Hook
 # ---------------------------------------------------------------------------
 
 def generate_prerendered_report(dest_path: Optional[Path] = None) -> Path:
-    """Pre-renders report.html for the last 200 runs and atomically writes to disk (D-18, D-19)."""
+    """Pre-renders report.html for the last 200 runs and atomically writes to disk."""
     if dest_path is None:
         dest_path = voicemode_telemetry.get_state_dir() / "report.html"
 
@@ -1154,11 +1012,11 @@ def generate_prerendered_report(dest_path: Optional[Path] = None) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Secure Browser Launch (D-24, RPT-06)
+# Secure Browser Launch
 # ---------------------------------------------------------------------------
 
 def open_report_file(path: Path | str, args: Optional[argparse.Namespace] = None) -> bool:
-    """Strictly validates target path before executing xdg-open with notification fallback (D-24, RPT-06)."""
+    """Strictly validates target path before executing xdg-open with notification fallback."""
     if not path:
         msg = "Report file not specified"
         print(msg, file=sys.stderr, flush=True)
@@ -1267,8 +1125,15 @@ def handle_report_command(args: argparse.Namespace) -> int:
         last = getattr(args, "last", None)
         if last is None:
             last = 200
-        model_filter = getattr(args, "model", None)
-        device_filter = getattr(args, "device", None)
+        raw_argv = getattr(args, "_raw_argv", None)
+        if raw_argv is not None:
+            model_specified = any(arg in ("-m", "--model") or arg.startswith("--model=") for arg in raw_argv)
+            device_specified = any(arg in ("-d", "--device") or arg.startswith("--device=") for arg in raw_argv)
+            model_filter = getattr(args, "model", None) if model_specified else None
+            device_filter = getattr(args, "device", None) if device_specified else None
+        else:
+            model_filter = getattr(args, "model", None)
+            device_filter = getattr(args, "device", None)
 
         filtered = filter_records(records, since=since, last=last, model=model_filter, device=device_filter)
         metrics = compute_report_metrics(filtered)
@@ -1331,13 +1196,15 @@ def handle_metrics_command(args: argparse.Namespace) -> int:
                 f"Archives: {health.get('archives', 0)}",
                 f"Total Runs: {metrics.get('total_runs', 0)}",
             ]
-            med = metrics.get("median_error_pct")
+            med = metrics.get("median_wait_s")
             if med is not None:
-                lines.append(f"Median Error: {med:.1f}%")
+                lines.append(f"Median Wait: {med:.3f}s")
             p90 = metrics.get("p90_latency_s")
             if p90 is not None:
                 lines.append(f"P90 Latency: {p90:.3f}s")
-            lines.append(f"Calibration: {metrics.get('calibration_tier', 'prior')}")
+            rtf = metrics.get("mean_rtf")
+            if rtf is not None:
+                lines.append(f"Mean RTF: {rtf:.3f}x")
             if skipped > 0:
                 lines.append(f"Skipped Rows: {skipped}")
             print("\n".join(lines), flush=True)

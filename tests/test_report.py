@@ -38,13 +38,15 @@ def _make_record(
     ts_start=None,
 ):
     now = time.time()
+    t_start = ts_start if ts_start is not None else (now - 10.0)
+    t_end = t_start + 10.0
     return {
         "schema": 1,
         "source": "stt",
         "run_id": run_id,
         "install_id": "test-install",
-        "ts_start": ts_start or (now - 10.0),
-        "ts_end": now,
+        "ts_start": t_start,
+        "ts_end": t_end,
         "outcome": outcome,
         "error_stage": None,
         "actual": {
@@ -127,7 +129,7 @@ class TestReportCLI(TempXdgTestCase):
 
         self.assertEqual(code, 0)
         output = f.getvalue()
-        self.assertIn("Voice Accuracy Report", output)
+        self.assertIn("Voice Latency Report", output)
         self.assertIn("Total Runs", output)
 
     def test_metrics_cli_dispatch(self):
@@ -305,17 +307,18 @@ class TestReportFilteringAndStats(TempXdgTestCase):
         ]
         metrics = voicemode_report.compute_report_metrics(records)
         self.assertEqual(metrics["total_runs"], 3)
-        self.assertIsNotNone(metrics["median_error_pct"])
+        self.assertIsNotNone(metrics["median_wait_s"])
         self.assertIsNotNone(metrics["p90_latency_s"])
-        self.assertGreater(metrics["median_error_pct"], 0)
+        self.assertIsNotNone(metrics["mean_rtf"])
+        self.assertGreater(metrics["median_wait_s"], 0)
 
     def test_compute_metrics_empty(self):
         """compute_report_metrics on empty records returns nulls, no crash."""
         metrics = voicemode_report.compute_report_metrics([])
         self.assertEqual(metrics["total_runs"], 0)
-        self.assertIsNone(metrics["median_error_pct"])
+        self.assertIsNone(metrics["median_wait_s"])
         self.assertIsNone(metrics["p90_latency_s"])
-        self.assertEqual(metrics["calibration_tier"], "prior")
+        self.assertIsNone(metrics["mean_rtf"])
         self.assertIsNone(metrics["last_run_timestamp"])
 
     def test_compute_metrics_single_run(self):
@@ -323,14 +326,14 @@ class TestReportFilteringAndStats(TempXdgTestCase):
         records = [_make_record(run_id="single")]
         metrics = voicemode_report.compute_report_metrics(records)
         self.assertEqual(metrics["total_runs"], 1)
-        self.assertIsNotNone(metrics["median_error_pct"])
+        self.assertIsNotNone(metrics["median_wait_s"])
 
     def test_terminal_summary_output(self):
         """render_terminal_summary produces formatted card with runs table."""
         records = [_make_record(run_id=f"r-{i}") for i in range(5)]
         metrics = voicemode_report.compute_report_metrics(records)
         output = voicemode_report.render_terminal_summary(records, metrics)
-        self.assertIn("Voice Accuracy Report", output)
+        self.assertIn("Voice Latency Report", output)
         self.assertIn("Total Runs", output)
         self.assertIn("5", output)
         self.assertIn("RUN_ID", output)
@@ -358,7 +361,7 @@ class TestExportFormats(TempXdgTestCase):
     """Task 3: CSV headers, JSON convergence, --output flag."""
 
     def test_csv_export_headers_and_data(self):
-        """RPT-05: CSV has exactly 17 canonical headers in stable order."""
+        """RPT-05: CSV has exactly 13 canonical headers in stable order."""
         records = [
             _make_record(run_id="r1", audio_s=4.0, pred_s=2.5, actual_s=2.4),
             _make_record(run_id="r2", audio_s=6.0, pred_s=3.0, actual_s=2.8),
@@ -367,7 +370,7 @@ class TestExportFormats(TempXdgTestCase):
         reader = csv.reader(io.StringIO(csv_text))
         headers = next(reader)
         self.assertEqual(headers, voicemode_report.CSV_HEADERS)
-        self.assertEqual(len(headers), 17)
+        self.assertEqual(len(headers), 13)
 
         rows = list(reader)
         self.assertEqual(len(rows), 2)
@@ -384,12 +387,12 @@ class TestExportFormats(TempXdgTestCase):
         self.assertEqual(len(rows), 0)
 
     def test_csv_headers_constant(self):
-        """CSV_HEADERS is a list of exactly 17 strings."""
-        self.assertEqual(len(voicemode_report.CSV_HEADERS), 17)
+        """CSV_HEADERS is a list of exactly 13 strings."""
+        self.assertEqual(len(voicemode_report.CSV_HEADERS), 13)
         expected_order = [
-            "run_id", "timestamp", "model", "device", "audio_s", "predicted_s",
-            "actual_s", "error_s", "error_pct", "load_s", "record_s", "decode_s",
-            "finalize_s", "insert_s", "outcome", "eta_source", "confidence",
+            "run_id", "timestamp", "model", "device", "audio_s", "load_s",
+            "record_s", "decode_s", "finalize_s", "insert_s", "wait_s",
+            "rtf", "outcome",
         ]
         self.assertEqual(voicemode_report.CSV_HEADERS, expected_order)
 
@@ -430,9 +433,9 @@ class TestExportFormats(TempXdgTestCase):
         data = json.loads(json_str)
 
         self.assertEqual(data["summary"]["total_runs"], 0)
-        self.assertIsNone(data["summary"]["median_error_pct"])
+        self.assertIsNone(data["summary"]["median_wait_s"])
         self.assertIsNone(data["summary"]["p90_latency_s"])
-        self.assertEqual(data["summary"]["calibration_tier"], "prior")
+        self.assertIsNone(data["summary"]["mean_rtf"])
         self.assertIsNone(data["summary"]["last_run_timestamp"])
         self.assertEqual(data["ledger"]["schema_version"], 1)
 
@@ -497,7 +500,7 @@ class TestExportFormats(TempXdgTestCase):
         self.assertIn("summary", data)
 
     def test_record_to_csv_row_fields(self):
-        """record_to_csv_row extracts all 17 fields."""
+        """record_to_csv_row extracts all 13 fields."""
         rec = _make_record(run_id="test-row", audio_s=3.0, pred_s=2.0, actual_s=1.8)
         row = voicemode_report.record_to_csv_row(rec)
         for header in voicemode_report.CSV_HEADERS:
@@ -511,7 +514,7 @@ class TestExportFormats(TempXdgTestCase):
         report_path = voicemode_report.generate_prerendered_report()
         self.assertTrue(report_path.exists())
         content = report_path.read_text()
-        self.assertIn("Voicemode Accuracy Report", content)
+        self.assertIn("Voicemode Latency Report", content)
 
 
 # ---------------------------------------------------------------------------
@@ -522,63 +525,42 @@ class TestSVGCharts(TempXdgTestCase):
     """Task 1: Fluid responsive inline SVG chart engines."""
 
     def test_scatter_svg_geometry_and_tooltips(self):
-        """Scatter plot contains viewBox, 1:1 diagonal, native tooltips, and 3-tier colors."""
+        """Latency scatter plot contains viewBox, native tooltips, and data points."""
         records = [
-            _make_record(run_id="r1", pred_s=1.0, actual_s=1.0),   # 0% error -> green
-            _make_record(run_id="r2", pred_s=1.2, actual_s=1.0),   # 20% error -> amber
-            _make_record(run_id="r3", pred_s=2.0, actual_s=1.0),   # 100% error -> crimson
+            _make_record(run_id="r1", audio_s=3.0, actual_s=2.0),
+            _make_record(run_id="r2", audio_s=5.0, actual_s=3.0),
+            _make_record(run_id="r3", audio_s=10.0, actual_s=5.0),
         ]
         metrics = voicemode_report.compute_report_metrics(records)
-        svg = voicemode_report.render_scatter_svg(records, metrics)
+        svg = voicemode_report.render_latency_scatter_svg(records, metrics)
 
         self.assertIn('viewBox="0 0 500 320"', svg)
-        self.assertIn('stroke-dasharray="4,4"', svg)  # diagonal line
         self.assertIn("<title>", svg)
         self.assertIn("Run r1:", svg)
-        self.assertIn(voicemode_report.COLOR_GREEN, svg)
-        self.assertIn(voicemode_report.COLOR_AMBER, svg)
-        self.assertIn(voicemode_report.COLOR_CRIMSON, svg)
+        self.assertIn("<circle", svg)
 
     def test_scatter_svg_single_run(self):
         """Scatter plot handles single run without dividing by zero."""
-        records = [_make_record(run_id="r1", pred_s=2.0, actual_s=2.0)]
+        records = [_make_record(run_id="r1", audio_s=4.0, actual_s=2.0)]
         metrics = voicemode_report.compute_report_metrics(records)
-        svg = voicemode_report.render_scatter_svg(records, metrics)
+        svg = voicemode_report.render_latency_scatter_svg(records, metrics)
         self.assertIn('viewBox="0 0 500 320"', svg)
         self.assertIn("<circle", svg)
 
     def test_scatter_svg_empty(self):
         """Scatter plot handles empty records gracefully."""
-        svg = voicemode_report.render_scatter_svg([], voicemode_report.compute_report_metrics([]))
+        svg = voicemode_report.render_latency_scatter_svg([], voicemode_report.compute_report_metrics([]))
         self.assertIn('viewBox="0 0 500 320"', svg)
 
     def test_trend_svg_geometry_and_lines(self):
-        """Trend chart contains polyline, 15% and 30% reference lines."""
-        records = [_make_record(run_id=f"r-{i}", pred_s=2.0 + i * 0.1, actual_s=2.0) for i in range(5)]
+        """RTF trend chart contains polyline and 1.0x reference line."""
+        records = [_make_record(run_id=f"r-{i}", audio_s=4.0, decode_ms=2000.0 + i * 200) for i in range(5)]
         metrics = voicemode_report.compute_report_metrics(records)
-        svg = voicemode_report.render_trend_svg(records, metrics)
+        svg = voicemode_report.render_rtf_trend_svg(records, metrics)
 
         self.assertIn('viewBox="0 0 500 320"', svg)
         self.assertIn("<polyline", svg)
-        self.assertIn("15%", svg)
-        self.assertIn("30%", svg)
-        self.assertIn("<title>", svg)
-
-    def test_histogram_svg_bins(self):
-        """Histogram bins residuals and renders rect bars with title tags."""
-        records = [
-            _make_record(run_id="r1", pred_s=2.1, actual_s=2.0),  # residual 0.1 -> bin 0
-            _make_record(run_id="r2", pred_s=2.4, actual_s=2.0),  # residual 0.4 -> bin 1
-            _make_record(run_id="r3", pred_s=2.9, actual_s=2.0),  # residual 0.9 -> bin 3
-            _make_record(run_id="r4", pred_s=4.5, actual_s=2.0),  # residual 2.5 -> bin 6
-        ]
-        metrics = voicemode_report.compute_report_metrics(records)
-        svg = voicemode_report.render_histogram_svg(records, metrics)
-
-        self.assertIn('viewBox="0 0 500 320"', svg)
-        self.assertIn("<rect", svg)
-        self.assertIn("0-0.25s", svg)
-        self.assertIn(">3s", svg)
+        self.assertIn("1.0x", svg)
         self.assertIn("<title>", svg)
 
     def test_stage_bars_svg_decomposition(self):
@@ -619,24 +601,21 @@ class TestHTMLReport(TempXdgTestCase):
         self.assertIn("privacy-card", html_doc)
 
     def test_html_report_table_and_cards(self):
-        """RPT-02: HTML report includes 4 hero metric cards, 2x2 chart grid, and scrollable runs table."""
+        """RPT-02: HTML report includes 4 hero metric cards, chart grid, and scrollable runs table."""
         records = [
-            _make_record(run_id="r1", pred_s=1.0, actual_s=1.0),
-            _make_record(run_id="r2", pred_s=1.2, actual_s=1.0),
-            _make_record(run_id="r3", pred_s=2.0, actual_s=1.0),
+            _make_record(run_id="r1", audio_s=3.0, actual_s=2.0),
+            _make_record(run_id="r2", audio_s=5.0, actual_s=3.0),
+            _make_record(run_id="r3", audio_s=10.0, actual_s=5.0),
         ]
         metrics = voicemode_report.compute_report_metrics(records)
         html_doc = voicemode_report.render_html_report(records, metrics)
 
         self.assertIn("Total Runs", html_doc)
-        self.assertIn("Median Error", html_doc)
+        self.assertIn("Median Wait", html_doc)
         self.assertIn("P90 Latency", html_doc)
-        self.assertIn("Calibration Tier", html_doc)
+        self.assertIn("Mean RTF", html_doc)
         self.assertIn("chart-grid", html_doc)
         self.assertIn("runs-table-container", html_doc)
-        self.assertIn("badge-green", html_doc)
-        self.assertIn("badge-amber", html_doc)
-        self.assertIn("badge-crimson", html_doc)
 
     def test_html_escaping(self):
         """Special characters in model or run_id are escaped to prevent XSS."""
@@ -677,8 +656,7 @@ class TestEmptyStateAndPrivacy(TempXdgTestCase):
         self.assertIn("1. Local Storage Location", html_doc)
         self.assertIn("2. Retained Schema", html_doc)
         self.assertIn("3. Clipboard Caveat", html_doc)
-        self.assertIn("4. Purge & Reset", html_doc)
-        self.assertIn("voice --reset-calibration", html_doc)
+        self.assertIn("4. Purge History", html_doc)
 
     def test_privacy_footer_warning_on_skipped_rows(self):
         """D-21: Privacy footer shows warning banner when skipped_count > 0."""
@@ -753,7 +731,7 @@ class TestPreRenderWorker(TempXdgTestCase):
             mock_gen.assert_called_once()
             self.assertTrue(report_file.exists())
             content = report_file.read_text()
-            self.assertIn("Voicemode Accuracy Report", content)
+            self.assertIn("Voicemode Latency Report", content)
 
     def test_prerender_exception_does_not_crash_finalization(self):
         """RPT-04: Exceptions in report pre-rendering are caught and do not prevent cleanup."""

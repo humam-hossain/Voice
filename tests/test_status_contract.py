@@ -30,8 +30,7 @@ class TestStatusContract(TempXdgTestCase):
     def test_schema_is_closed_and_sized(self):
         s = voicemode_telemetry.build_status(pid=123, run_id='r1', state='transcribing', phase='load',
                                             started_at=1.0, updated_at=1000.0, audio_s=1.0, segments=1,
-                                            segments_done=0, eta_remaining_s=5.0, eta_confidence='low',
-                                            eta_source='prior')
+                                            segments_done=0)
         self.assertEqual(tuple(s.keys()), tuple(voicemode_telemetry.STATUS_V1_KEYS))
         for bad in ['text', 'transcript', 'clipboard']:
             with self.subTest(key=bad):
@@ -47,10 +46,6 @@ class TestStatusContract(TempXdgTestCase):
             voicemode_telemetry.validate_status(dict(s, state='listening'))
         with self.assertRaises(ValueError):
             voicemode_telemetry.validate_status(dict(s, phase='thinking'))
-        s2 = voicemode_telemetry.build_status(pid=123, run_id='r1', state='transcribing', phase='load',
-                                             started_at=1.0, updated_at=1000.0, eta_remaining_s=-0.5)
-        self.assertEqual(s2['eta_remaining_s'], 0.0)
-        self.assertEqual(s2['eta_epoch'], 1000.0)
     
     def test_publish_is_atomic_under_readers(self):
         state_dir = voicemode_telemetry.get_state_dir()
@@ -174,10 +169,8 @@ class TestStatusContract(TempXdgTestCase):
         s = captured.get('status')
         self.assertIsNotNone(s)
         self.assertEqual(s['state'], 'transcribing')
-        self.assertIn(s['eta_source'], ('prior', 'cold'))
-        self.assertEqual(s['eta_confidence'], 'low')
-        self.assertGreater(s['eta_remaining_s'], 0)
-        self.assertGreaterEqual(s['eta_epoch'], s['updated_at'])
+        self.assertNotIn('eta_remaining_s', s)
+        self.assertNotIn('eta_source', s)
         self.assertGreaterEqual(s['segments'], 1)
     
     def test_heartbeat_while_recording(self):

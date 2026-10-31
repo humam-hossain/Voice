@@ -109,7 +109,6 @@ class TestSchemaV1(TempXdgTestCase):
                                                           'compression_ratio': 1.2, 'no_speech_prob': 0.01,
                                                           'temperature': 0.0, 'vad_audio_s': 1.0, 'error_type': None}])
         self.assertEqual(set(r.keys()), set(t.SCHEMA_V1_KEYS))
-        self.assertIn('shown_s', r['predicted'])
         self.assertIn('avg_logprob', r['segments'][0])
         self.assertEqual(r['tts'], t.tts_reserved())
         self.assertEqual(r['source'], 'stt')

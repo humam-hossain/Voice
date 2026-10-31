@@ -15,7 +15,6 @@ Schema v1 fields (every key present on each row):
 | outcome | str | `success \| cancelled \| error \| watchdog_timeout \| abandoned` |
 | error_stage | str|null | Stage where error occurred |
 | actual | object | `{total_ms, finalize_ms, load_ms, decode_ms, insert_ms}` |
-| predicted | object | ETA prediction metadata (shown values) |
 | audio_s | float | Audio duration |
 | chars_out | int | Transcript character count (count only) |
 | chars_typed | int | Characters typed/inserted (count only) |
@@ -23,7 +22,6 @@ Schema v1 fields (every key present on each row):
 | segments | array | Per-segment evidence (timings/probabilities, no text) |
 | config | object | Fingerprint: `model, device, compute_type, beam_size, vad_filter, language, chunk_s` only |
 | backend | str|null | Resolved backend (e.g., `cpu, int8`) |
-| calibration_key | str|null | Portability key for calibration grouping |
 | tts | object | Reserved fields (all null in this milestone) |
 
 **Not recorded:** transcript text, words, prompts, hotwords, clipboard contents, argv, file paths, hostname, username, OS version, CPU/GPU identifiers.
