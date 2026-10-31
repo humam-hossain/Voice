@@ -2,29 +2,166 @@
 
 Desktop-global speech-to-text dictation and text-to-speech utility for **Arch Linux running Hyprland**.
 
-voicemode delivers seamless, low-latency push-to-talk transcription that types directly into any focused window (terminals, code editors, browsers) and on-demand neural text-to-speech reading of highlighted screen text using local, offline models on Wayland.
+`voicemode` delivers low-latency push-to-talk transcription that types recognized speech directly into the active focused window (terminals, code editors, browsers) and on-demand neural text-to-speech reading of mouse-highlighted screen text using local, offline models on Wayland.
+
+Both `voice` and `voicemode` command names are installed as identical entry points.
 
 - **Dedicated Architecture & Setup Guide:** [`docs/ARCH_HYPRLAND.md`](docs/ARCH_HYPRLAND.md)
 - **Dependency & License Reference:** [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
+- **Local Telemetry & Storage Baseline:** [`docs/telemetry.md`](docs/telemetry.md)
+
+---
+
+## At a Glance
+
+| Shortcut / Command | Action | Scope / Context | Audio Cue / Indicator |
+|---|---|---|---|
+| `SUPER + SHIFT + M` | **Push-to-Talk STT Toggle** | Global desktop | **Start:** 880 Hz (A5) high chime<br/>**Reminder:** 1046 Hz (C6) tick every 5s<br/>**Stop:** 1175 Hz → 660 Hz falling chime |
+| `SUPER + T` | **Read Selected Text (TTS)** | Global desktop | Synthesizes highlighted text (`wl-paste --primary`) via Kokoro ONNX |
+| `SUPER + T` *(while speaking)* | **Stop Active Speech** | Global desktop | Immediately halts active audio playback |
+| `voice --report` | **Latency Performance Report** | Terminal | Displays stage timing breakdown, median wait, P90, and RTF metrics |
+| `voice --doctor` | **Pre-Flight Diagnostics** | Terminal | Inspects binaries, mic volume/mute, model weights, keybinds, and PIDs |
+| `voice --verify` | **3-Tier E2E Verification** | Terminal | Runs automated pipeline self-test (~3.3s) and interactive app matrix |
+| `voice --kill` | **Daemon Recovery** | Terminal | Terminates active background workers and purges stale PID locks |
+| `voice --status` | **Daemon Status Check** | Terminal | Reports active recording/transcribing/idle status and PID health |
+
+---
+
+## Prerequisites & Installation (Arch Linux + Hyprland)
+
+### 1. System Packages
+
+On **`dots-hyprland`** installations, Wayland clipboard utilities, notification daemons, and PipeWire are pre-installed. You only need to install two packages:
+
+```bash
+sudo pacman -S wtype ffmpeg
+```
+
+*(On a vanilla Arch Linux installation, install the full toolchain: `sudo pacman -S wtype ffmpeg wl-clipboard libnotify pipewire wireplumber`)*
+
+### 2. Python Virtual Environment (`uv`)
+
+Create an isolated virtual environment and install voicemode with Kokoro TTS dependencies:
+
+```bash
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install -e ".[kokoro]"
+```
+
+Symlink the command to your `~/.local/bin/` so it is available globally:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/.venv/bin/voice" ~/.local/bin/voice
+ln -sf "$(pwd)/.venv/bin/voicemode" ~/.local/bin/voicemode
+```
+
+### 3. Download Local Offline Model Assets
+
+Download Kokoro neural TTS weights (~338 MB total):
+
+```bash
+scripts/download-kokoro-assets.sh
+# Or alternatively via CLI:
+voice --download-tts-assets
+```
+
+Pre-cache Faster-Whisper `medium.en` speech recognition weights (~1.5 GB):
+
+```bash
+voice --check --allow-download
+```
+
+### 4. Install Hyprland Keybindings (GNU Stow-Safe)
+
+Install the global hotkeys into your Hyprland configuration:
+
+```bash
+voice --install-hotkey
+```
+
+> **GNU Stow Note:** If your `~/.config/hypr/custom/keybinds.lua` is a symbolic link pointing to a dotfiles repository (e.g. `~/.dotfiles/stow/hypr/...`), voicemode resolves the real canonical path and modifies it in-place without breaking or unlinking your symlink.
+
+---
+
+## CLI Command Reference
+
+Below is a complete reference of all operational modes and commands you can run via `voice` or `voicemode`.
+
+### 1. Dictation & Speech-to-Text
+
+| Command | Description | Example |
+|---|---|---|
+| `voice --toggle` | Toggle push-to-talk recording. Starts recording if idle; if recording, stops, transcribes audio, and types/pastes text into the focused window. | `voice --toggle` |
+| `voice --cancel` | Immediately cancel active background recording without transcribing or typing text. Cleans up audio buffers and lock files. | `voice --cancel` |
+| `voice --terminal` | Run in interactive terminal-only mode. Press `Ctrl+B` to start recording, press `Ctrl+B` again to transcribe and paste. Press `Ctrl+C` to exit. | `voice --terminal` |
+| `voice --watch` | Default action when no mode flag is given. Continuously monitors and streams background STT and TTS activity logs in real time. | `voice --watch` |
+| `voice --check` | Test Faster-Whisper model loading and print the selected device and quantization backend, then exit. | `voice --check --allow-download` |
+
+### 2. Text-to-Speech (TTS)
+
+| Command | Description | Example |
+|---|---|---|
+| `voice --speak <text>` | Synthesize and speak the specified text. Pass `"-"` to stream text from standard input. | `voice --speak "Build completed successfully"`<br/>`cat note.txt \| voice --speak -` |
+| `voice --speak-selection` | Synthesize and read text currently highlighted with the mouse (`wl-paste --primary`), falling back to system clipboard. If speech is already playing, toggles it off. | `voice --speak-selection` |
+| `voice --stop-tts` | Immediately halt any active TTS audio playback process and clean up temporary files. | `voice --stop-tts` |
+| `voice --list-tts-voices` | Print an alphabetical table of all available Kokoro voice IDs with language codes, gender, and default/secondary markers. | `voice --list-tts-voices` |
+| `voice --tts-check` | Inspect TTS configuration, installed engines (`kokoro-onnx`, `edge-tts`), model paths, and voice tensor files. | `voice --tts-check` |
+| `voice --download-tts-assets` | Download and verify Kokoro ONNX model weights and voice embeddings into `models/kokoro/`. | `voice --download-tts-assets` |
+
+### 3. Latency & Performance Reporting
+
+| Command | Options | Description | Example |
+|---|---|---|---|
+| `voice --report` | `[--format text\|html\|csv\|json]`<br/>`[--output PATH]`<br/>`[--open]`<br/>`[--since TIME]`<br/>`[--last N]`<br/>`[--model NAME]`<br/>`[--device DEV]` | Generate speech transcription latency report. Displays summary card (total runs, median wait, P90, mean RTF) and stage breakdowns (Load, Decode, Finalize, Insert). | `voice --report`<br/>`voice --report --open`<br/>`voice --report --format csv --output report.csv`<br/>`voice --report --since 24h`<br/>`voice --report --last 50` |
+| `voice --metrics` | `[--json]` or `[--json-status]` | Print telemetry ledger summary (file path, disk size, total recorded rows, archives, median wait, P90 latency, mean RTF). Use `--json` for machine-readable output. | `voice --metrics`<br/>`voice --metrics --json` |
+
+### 4. Diagnostics, Testing & Verification
+
+| Command | Options | Description | Example |
+|---|---|---|---|
+| `voice --doctor` | `[--json]`<br/>`[--export-markdown PATH]` | Run system pre-flight diagnostic probe. Checks external binaries (`wtype`, `wl-clipboard`, `ffmpeg`, etc.), PipeWire/WirePlumber mic volume/mute state, model weights, keybind status, and daemon PIDs. | `voice --doctor`<br/>`voice --doctor --json` |
+| `voice --verify` | `[--tier 1\|2\|3\|all]`<br/>`[--json]`<br/>`[--export-markdown PATH]` | Run end-to-end verification suite:<br/>• **Tier 1:** Static binary & permission checks<br/>• **Tier 2:** Automated synthetic audio loopback test (~3.3s)<br/>• **Tier 3:** Interactive window typing matrix<br/>• **all:** Runs all tiers sequentially | `voice --verify`<br/>`voice --verify --tier 2`<br/>`voice --verify --tier 1 --json` |
+| `voice --status` | `[--json-status]` | Print active daemon status (`recording`, `transcribing`, or `idle`). With `--json-status`, prints structured JSON contract. | `voice --status`<br/>`voice --status --json-status` |
+| `voice --test-beep` | — | Test audio cue feedback by sequentially playing start chime, reminder tick, and stop chime. | `voice --test-beep` |
+| `voice --list-devices` | — | Query PortAudio hardware and list all available recording and playback audio devices with index numbers. | `voice --list-devices` |
+
+### 5. Desktop Shortcuts & Keybinding Setup
+
+| Command | Description | Example |
+|---|---|---|
+| `voice --install-hotkey` / `--install-hotkeys` | Automatically detect the desktop environment (Hyprland or GNOME) and install standard shortcuts. | `voice --install-hotkey` |
+| `voice --install-hyprland` | Specifically append keybindings to `~/.config/hypr/custom/keybinds.lua` (preserving Stow symlinks) and reload Hyprland. | `voice --install-hyprland` |
+| `voice --print-hyprland` | Print the exact Lua configuration block for Hyprland to stdout without modifying files. | `voice --print-hyprland` |
+
+### 6. Emergency Recovery & Reset
+
+| Command | Description | Example |
+|---|---|---|
+| `voice --kill` | Terminate active background workers (`SIGTERM` followed by `SIGKILL` after 2s), purge stale PID locks, and release virtual keys. | `voice --kill` |
+| `voice --reset-keys` | Emergency release of any stuck virtual keyboard keys via `ydotool` (useful if typing was interrupted). | `voice --reset-keys` |
 
 ---
 
 ## Parameters & Configuration Reference
 
-Complete reference of all parameters, CLI flags, environment variables, default values, and valid ranges.
+Every parameter can be passed directly as a command-line flag or defined globally in your environment (e.g. in `~/.bashrc`, `~/.zshrc`, or `~/.config/hypr/hyprland.conf`). Command-line flags always take precedence over environment variables.
 
 ### 1. Speech-to-Text (Whisper STT)
 
 | Parameter / CLI Flag | Environment Variable | Type / Valid Range | Default | Description |
 |---|---|---|---|---|
-| `--model <name>` | `VOICE_STT_MODEL` | String: `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large-v1`, `large-v2`, `large-v3`, `turbo`, or custom HuggingFace repo / local directory path | `small.en` | Faster-Whisper model size or path for speech recognition. |
+| `--model <name>` | `VOICE_STT_MODEL` | String: `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large-v1`, `large-v2`, `large-v3`, `turbo`, or custom HuggingFace repo / local directory path | `medium.en` | Faster-Whisper model size or path for speech recognition. |
 | `--device <device>` | `VOICE_STT_DEVICE` | `cpu`, `cuda`, `auto` | `cpu` | Computation device for Whisper CTranslate2 inference. |
 | `--compute-type <type>` | `VOICE_STT_COMPUTE_TYPE` | `int8`, `int8_float16`, `int16`, `float16`, `float32`, `auto` | `int8` | Model weight quantization precision (`int8` recommended for CPU). |
-| `--language <lang>` | `VOICE_STT_LANGUAGE` | ISO-639-1 code (e.g. `en`, `es`, `fr`, `de`, `ja`, `zh`) or empty for auto-detect | `en` | Spoken language for transcription. |
+| `--language <lang>` | `VOICE_STT_LANGUAGE` | ISO-639-1 code (e.g. `en`, `es`, `fr`, `de`, `ja`, `zh`) or empty string for auto-detect | `en` | Spoken language for transcription. |
 | `--beam-size <int>` | `VOICE_STT_BEAM_SIZE` | Integer $\ge 1$ (typically `1` to `5`) | `1` | Beam search width during Whisper decoding (`1` = greedy/fastest). |
 | `--vad-filter` / `--no-vad-filter` | `VOICE_VAD_FILTER` | Boolean (`true` / `false`) | `true` | Silero VAD (Voice Activity Detection) filter to trim silence before STT inference. |
+| `--chunk-seconds <sec>` | `VOICE_CHUNK_SECONDS` | Float $\ge 1.0$ seconds | `180.0` (3 min) | Audio chunk duration for background recording and concurrent processing. |
+| — | `VOICE_MAX_RECORDING_SECONDS` | Float $> 0.0$ seconds | `1800.0` (30 min) | Safety hard cutoff ceiling for a single continuous recording session. |
+| — | `VOICE_STT_TIMEOUT_SECONDS` | Float $> 0.0$ seconds | `300.0` (5 min) | Watchdog timeout for background transcription processes before aborting. |
 | `--allow-download` | — | Flag (boolean) | `false` | Allow Faster-Whisper to download missing model weights from Hugging Face. |
-| — | `VOICE_MAX_RECORDING_SECONDS` | Float $> 0.0$ seconds | `300.0` (5 min) | Safety hard cutoff for a single continuous recording session. |
 
 ### 2. Text-to-Speech (TTS)
 
@@ -71,148 +208,88 @@ Complete reference of all parameters, CLI flags, environment variables, default 
 | `--notify` / `--no-notify` | — | Boolean (`true` / `false`) | `true` (`--notify`) | Display desktop notification toasts via `notify-send`. |
 | `--test-beep` | — | Flag | — | Test auditory cues by playing start chime, reminder tick, and stop chime, then exit. |
 
-### 6. Control Commands & Operational Modes
+### 6. Local Telemetry, Performance & Storage
 
-| Command / CLI Flag | Arguments | Scope | Description |
+| Parameter / Variable | Type | Default | Description |
 |---|---|---|---|
-| `--toggle` | — | Global desktop | Toggle push-to-talk recording: start recording if idle; stop, transcribe, and type if active. |
-| `--speak-selection` | — | Global desktop | Synthesize and speak currently selected text (`wl-paste --primary`), falling back to clipboard. Halts speech if already active. |
-| `--speak <text>` | Text string or `-` (stdin) | CLI / Scripting | Speak the provided text string using TTS (use `-` to pipe from stdin). |
-| `--stop-tts` | — | Global desktop | Immediately halt active TTS playback and clean up temporary audio files. |
-| `--status` | — | Diagnostics | Print current status of STT and TTS background worker processes and PID locks. |
-| `--kill` | — | Recovery | Terminate active background workers and purge stale PID locks. |
-| `--doctor` | — | Diagnostics | Run pre-flight diagnostic probe (binaries, mic volume/mute, model weights, keybinds, PIDs). |
-| `--verify` | `[--tier 1\|2\|3\|all]` | Testing | Run 3-tier end-to-end verification suite (`tier 1` static, `tier 2` synthetic loopback, `tier 3` interactive matrix). |
-| `--json` | — | Output modifier | Format `--doctor` or `--verify` results as JSON. |
-| `--export-markdown <path>` | File path | Output modifier | Export verification or diagnostic report to a markdown file. |
-| `--check` | — | Diagnostics | Test Faster-Whisper model loading and print selected compute backend. |
-| `--tts-check` | — | Diagnostics | Inspect TTS configuration, installed packages (`kokoro-onnx`, `edge-tts`), and voice assets. |
-| `--list-tts-voices` | — | Discovery | List all available Kokoro voice names sorted alphabetically with default/secondary markers. |
-| `--download-tts-assets` | — | Setup | Download and verify Kokoro ONNX model and voice weights into `models/kokoro/`. |
-| `--terminal` | — | Interactive | Run in terminal-only mode with `Ctrl+B` push-to-talk toggle. |
-| `--watch` | — | Monitoring | Follow and stream STT and TTS background activity logs in real time. |
-| `--install-hotkey` / `--install-hotkeys` | — | Setup | Install desktop keybindings (auto-detects Hyprland or GNOME). |
-| `--install-hyprland` | — | Setup | Append keybinds to `~/.config/hypr/custom/keybinds.lua` and reload Hyprland. |
-| `--print-hyprland` | — | Setup | Print Hyprland Lua keybind configuration block to stdout. |
+| `VOICE_METRICS` | Boolean string (`on`/`off`, `1`/`0`) | `on` (enabled) | Primary kill switch for telemetry ledger. Set to `off`, `0`, `false`, or `no` to disable all ledger/status writes. |
+| `VOICE_TELEMETRY` | Boolean string | Consulted if `VOICE_METRICS` is unset | Backward-compatible alias for `VOICE_METRICS`. |
+| `XDG_STATE_HOME` | Directory path | `~/.local/state` | Root directory for persistent telemetry data (`$XDG_STATE_HOME/voicemode/metrics.jsonl`). |
+| `XDG_RUNTIME_DIR` | Directory path | `/tmp/voice-stt-$UID` | Ephemeral runtime directory for daemon state (`$XDG_RUNTIME_DIR/voice-stt/status.json`, logs, and PID locks). |
 
 ---
 
-## At a Glance
-
-| Shortcut / Command | Action | Scope / Context | Audio Cue / Indicator |
-|---|---|---|---|
-| `SUPER + SHIFT + M` | **Push-to-Talk STT Toggle** | Global desktop | **Start:** 880 Hz (A5) high chime<br/>**Reminder:** 1046 Hz (C6) tick every 5s<br/>**Stop:** 1175 Hz -> 660 Hz falling chime |
-| `SUPER + T` | **Read Selected Text (TTS)** | Global desktop | Synthesizes highlighted text (`wl-paste --primary`) via Kokoro ONNX |
-| `SUPER + T` *(while speaking)* | **Stop Active Speech** | Global desktop | Immediately halts active audio playback |
-| `voice --doctor` | **Pre-Flight Diagnostics** | Terminal | Inspects binaries, mic volume/mute, model weights, keybinds, and PIDs |
-| `voice --verify` | **3-Tier E2E Verification** | Terminal | Runs automated pipeline self-test (~3.3s) and interactive app matrix |
-| `voice --kill` | **Daemon Recovery** | Terminal | Terminates active background workers and purges stale PID locks |
-| `voice --status` | **Daemon Status Check** | Terminal | Reports active recording/transcribing/idle status and PID health |
-
----
-
-## Prerequisites & Installation (Arch Linux + Hyprland)
-
-### 1. System Packages
-
-On **`dots-hyprland`** installations, Wayland clipboard utilities, notification daemons, and PipeWire are pre-installed. You only need to install two packages:
-
-```bash
-sudo pacman -S wtype ffmpeg
-```
-
-*(On a vanilla Arch Linux installation, install the full toolchain: `sudo pacman -S wtype ffmpeg wl-clipboard libnotify pipewire wireplumber`)*
-
-### 2. Python Virtual Environment (`uv`)
-
-Create an isolated virtual environment and install voicemode with Kokoro TTS dependencies:
-
-```bash
-uv venv --python 3.12 .venv
-source .venv/bin/activate
-uv pip install -e ".[kokoro]"
-```
-
-Symlink the command to your `~/.local/bin/` so it is available globally:
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$(pwd)/.venv/bin/voice" ~/.local/bin/voice
-ln -sf "$(pwd)/.venv/bin/voicemode" ~/.local/bin/voicemode
-```
-
-### 3. Download Local Offline Model Assets
-
-Download Kokoro neural TTS weights (~338 MB total):
-
-```bash
-scripts/download-kokoro-assets.sh
-```
-
-Pre-cache Faster-Whisper `small.en` speech recognition weights (~480 MB):
-
-```bash
-voice --check --allow-download
-```
-
-### 4. Install Hyprland Keybindings (GNU Stow-Safe)
-
-Install the global hotkeys into your Hyprland configuration:
-
-```bash
-voice --install-hotkey
-```
-
-> **GNU Stow Note:** If your `~/.config/hypr/custom/keybinds.lua` is a symbolic link pointing to a dotfiles repository (e.g. `~/.dotfiles/stow/hypr/...`), voicemode resolves the real canonical path and modifies it in-place without breaking or unlinking your symlink.
-
----
-
-## Daily Workflows
+## Daily Workflows & Usage Examples
 
 ### 1. Push-to-Talk Speech Dictation
 
-1. Focus any window: Kitty terminal, Foot, Neovim, VS Code, or a browser input field.
-2. Press `SUPER + SHIFT + M`. You will hear a crisp high chime (880 Hz) indicating recording has begun. A subtle tick sounds every 5 seconds as a reminder.
-3. Speak your dictation naturally.
-4. Press `SUPER + SHIFT + M` again. A descending chime sounds as Faster-Whisper transcribes your voice on CPU (~1.8s) and types the text directly into the focused application via `wtype`.
+```bash
+# Toggle recording via CLI (same as pressing SUPER + SHIFT + M)
+voice --toggle
+
+# Cancel active recording if you change your mind:
+voice --cancel
+
+# Use a faster, smaller model on lower-spec machines:
+voice --toggle --model small.en
+
+# Paste instead of typing for complex text or web forms:
+voice --toggle --output-method paste
+```
 
 ### 2. Neural Screen Reading (TTS)
 
-1. Highlight any paragraph or snippet of text on your screen with your mouse in Firefox, Chromium, Zathura, or a terminal.
-2. Press `SUPER + T`. Voicemode captures the Wayland primary selection (`wl-paste --primary`) and streams audio synthesized locally by Kokoro ONNX through `ffplay`.
-3. To stop speech at any time, press `SUPER + T` again.
+```bash
+# Read mouse-selected text aloud (press again to stop):
+voice --speak-selection
 
-### 3. System Diagnostics & Recovery
+# Speak a custom message:
+voice --speak "All system packages have been updated"
 
-If audio devices are changed or a crash occurs:
+# Pipe text from any command into speech:
+curl -s https://wttr.in?format=3 | voice --speak -
+
+# Read text with a faster British voice:
+voice --speak "Analyzing logs" --tts-voice bm_george --tts-speed 1.4
+
+# Immediately stop speech playback:
+voice --stop-tts
+```
+
+### 3. Monitoring & Latency Reporting
 
 ```bash
-# Check all dependencies, audio devices, and models:
+# View terminal summary report:
+voice --report
+
+# Open the fluid, dark-mode HTML latency dashboard in your browser:
+voice --report --open
+
+# Export the last 7 days of runs to a canonical CSV file:
+voice --report --format csv --since 7d --output ~/latency.csv
+
+# View quick metrics summary in terminal:
+voice --metrics
+
+# Query active daemon status as JSON (great for scripts or Waybar/Quickshell):
+voice --status --json-status
+```
+
+### 4. Diagnostics & Recovery
+
+```bash
+# Run complete system probe:
 voice --doctor
+
+# Run automated synthetic loopback pipeline test:
+voice --verify --tier 2
 
 # Kill any orphaned processes and clear stale lock files:
 voice --kill
 
-# Run the 3-tier self-test suite:
-voice --verify --tier 2
+# Emergency unstick keyboard keys if typing was interrupted:
+voice --reset-keys
 ```
-
----
-
-## Configuration Quick Reference
-
-For the comprehensive list of all STT, TTS, audio capture, text injection, cue, and command parameters, see the [Parameters & Configuration Reference](#parameters--configuration-reference) at the top of this document.
-
-| Common Setting | Flag | Environment Variable | Default | Valid Range / Options |
-|---|---|---|---|---|
-| Typing delay | `--type-delay <ms>` | `VOICE_TYPE_DELAY` | `2` ms | $\ge 0$ ms |
-| Pre-type settling delay | `--pre-type-delay <ms>` | `VOICE_PRE_TYPE_DELAY` | `50` ms | $\ge 0$ ms |
-| Preserve newlines | `--keep-newlines` | `VOICE_KEEP_NEWLINES` | `false` | `true`, `false` |
-| Audio cues | `--beep` / `--no-beep` | `VOICE_BEEP` | `true` | `true`, `false` |
-| Cue volume | `--beep-volume <0.0-1.0>` | `VOICEMODE_CUE_VOLUME` | `0.08` | `0.0` - `1.0` |
-| Whisper STT model | `--model <name>` | `VOICE_STT_MODEL` | `small.en` | `tiny.en` ... `large-v3`, `turbo` |
-| TTS speed multiplier | `--tts-speed <float>` | `VOICE_TTS_SPEED` | `1.2` | `0.5` - `2.0` |
-| Primary TTS voice | `--tts-voice <id>` | `VOICE_TTS_VOICE` | `af_heart` | Any Kokoro or Edge voice ID |
 
 ---
 
@@ -221,6 +298,7 @@ For the comprehensive list of all STT, TTS, audio capture, text injection, cue, 
 - **Speech-to-Text:** 100% offline. Audio buffers are captured locally, transcribed via Faster-Whisper CTranslate2, and temporary audio files are unlinked immediately after insertion.
 - **Text-to-Speech:** Default Kokoro engine runs 100% locally via ONNX Runtime without network access.
 - *(Optional: Microsoft Edge TTS can be enabled via `--tts-backend edge`, which streams to Microsoft servers. It is disabled by default.)*
+- **Telemetry:** Strictly local performance timing metrics (stage durations, character counts, model configuration). No transcript text, audio, clipboard content, or prompts are ever recorded or transmitted. See [`docs/telemetry.md`](docs/telemetry.md).
 
 ---
 
