@@ -983,6 +983,35 @@ def process_alive(pid: int) -> bool:
         return False
 
 
+def find_active_recorder_pid(exclude_pid: Optional[int] = None) -> Optional[int]:
+    """Scan /proc to find any currently running voice worker executing --record-background."""
+    proc_root = Path("/proc")
+    try:
+        entries = list(proc_root.iterdir())
+    except Exception:
+        return None
+    for proc_dir in entries:
+        try:
+            name = proc_dir.name
+            if not name.isdigit():
+                continue
+            p = int(name)
+            if exclude_pid is not None and p == exclude_pid:
+                continue
+            cmdline_path = proc_dir / "cmdline"
+            if not cmdline_path.exists():
+                continue
+            raw = cmdline_path.read_bytes()
+            if not raw:
+                continue
+            cmdline = raw.decode("utf-8", errors="ignore").lower()
+            if ("voice" in cmdline or "voicemode" in cmdline) and "--record-background" in cmdline:
+                return p
+        except (ValueError, FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            continue
+    return None
+
+
 def remove_pid(pid: int | None = None, path: Path | None = None) -> None:
     if path is None:
         path = PID_FILE
@@ -2042,6 +2071,13 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
     with voicemode_telemetry.with_pid_lock():
         reconcile_abandoned_run()
         pid, state = read_pid_state()
+        if not (pid and process_alive(pid)):
+            active_p = find_active_recorder_pid()
+            if active_p and process_alive(active_p):
+                pid = active_p
+                state = "recording"
+                write_pid_state(pid, state)
+
         if pid and process_alive(pid):
             if state == "starting":
                 deadline = time.monotonic() + 0.300
@@ -2070,6 +2106,17 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
                 play_cue(args, "error")
                 print(f"Voice worker busy ({state}).", flush=True)
                 return 0
+
+        running_worker = find_active_recorder_pid()
+        if running_worker and process_alive(running_worker):
+            write_pid_state(running_worker, "recording")
+            try:
+                os.kill(running_worker, signal.SIGUSR1)
+            except ProcessLookupError:
+                pass
+            write_pid_state(running_worker, "transcribing")
+            print("Stopping voice recording...")
+            return 0
 
         if pid:
             remove_pid(pid)
@@ -2230,11 +2277,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 tot = total_chunks_holder.get("n") or 1
                 with results_lock:
                     done = len(results)
+                cur_tot = round(time.monotonic() - t_start, 3)
                 _publish_status(
                     "transcribing",
                     "decode",
                     segments=tot,
                     segments_done=done,
+                    total_duration_s=cur_tot,
                 )
             except Exception:
                 pass
@@ -2322,6 +2371,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     r.audio_s for r in results.values()
                     if r and getattr(r, "audio_s", None)
                 )
+            cur_tot = round(time.monotonic() - t_start, 3)
             if capture_closed.is_set():
                 tot = total_chunks_holder["n"] or max(done, 1)
                 _publish_status(
@@ -2330,14 +2380,17 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     segments=tot,
                     segments_done=done,
                     transcribed_audio_s=transcribed_s,
+                    total_duration_s=cur_tot,
                 )
             else:
                 # Publish incremental transcription progress while still recording
+                live_rec = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
                 _publish_status(
                     "recording",
                     "capture",
                     segments_done=done,
                     transcribed_audio_s=transcribed_s,
+                    total_duration_s=live_rec,
                 )
 
     wav_paths: list[Path] = []
@@ -2345,6 +2398,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
     duration = 0.0
     total_chunks = 0
     try:
+        existing_pid = find_active_recorder_pid(exclude_pid=pid)
+        if existing_pid and process_alive(existing_pid):
+            print(f"Another voice worker (pid {existing_pid}) already running; exiting.", flush=True)
+            play_cue(args, "error")
+            return 0
         current_pid, _ = read_pid_state()
         if current_pid is not None and current_pid != pid and process_alive(current_pid):
             print(f"Another voice worker (pid {current_pid}) already owns the lock; exiting.", flush=True)
@@ -2354,6 +2412,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         _publish_status(
             "starting",
             "init",
+            total_duration_s=0.0,
         )
         input_device = parse_device(args.input_device)
         sample_rate = resolve_sample_rate(input_device, args.sample_rate)
@@ -2376,6 +2435,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             audio_s=0.0,
             segments=0,
             segments_done=0,
+            total_duration_s=0.0,
         )
 
         play_cue(args, "start")
@@ -2394,7 +2454,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
             if args.beep and beep_interval > 0
             else None
         )
-        next_status_at = time.monotonic() + voicemode_telemetry.STATUS_HEARTBEAT_S
+        live_heartbeat_s = min(
+            voicemode_telemetry.STATUS_HEARTBEAT_S,
+            float(os.getenv("VOICE_STATUS_HEARTBEAT_S", "0.5")),
+        )
+        next_status_at = time.monotonic() + live_heartbeat_s
 
         while not stop_requested and not cancel_requested:
             if recorder.started_at and (time.monotonic() - recorder.started_at) >= ceiling:
@@ -2419,10 +2483,11 @@ def run_background_recording(args: argparse.Namespace) -> int:
                         audio_s=live,
                         segments=segs,
                         transcribed_audio_s=cur_transcribed,
+                        total_duration_s=live,
                     )
                 except Exception:
                     pass
-                next_status_at = time.monotonic() + voicemode_telemetry.STATUS_HEARTBEAT_S
+                next_status_at = time.monotonic() + live_heartbeat_s
             time.sleep(0.05)
 
         if cancel_requested:
@@ -2442,12 +2507,14 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 done_now = len(results)
             live_audio = round(max(0.0, time.monotonic() - (recorder.started_at or time.monotonic())), 3)
             segs_est = int(math.ceil(live_audio / seg_duration)) if seg_duration and seg_duration > 0 else 0
+            cur_tot = round(time.monotonic() - t_start, 3)
             _publish_status(
                 "transcribing",
                 "finalize",
                 audio_s=live_audio,
                 segments=segs_est,
                 segments_done=done_now,
+                total_duration_s=cur_tot,
             )
         except Exception:
             pass
@@ -2471,12 +2538,14 @@ def run_background_recording(args: argparse.Namespace) -> int:
             d = round(float(duration), 3)
             with results_lock:
                 done_now = len(results)
+            cur_tot = round(time.monotonic() - t_start, 3)
             _publish_status(
                 "transcribing",
                 "finalize",
                 audio_s=d,
                 segments=total_chunks,
                 segments_done=done_now,
+                total_duration_s=cur_tot,
             )
         except Exception:
             pass
@@ -2491,7 +2560,29 @@ def run_background_recording(args: argparse.Namespace) -> int:
         chunk_queue.put(None)
 
         active_stage = "Whisper transcription"
-        consumer.join()
+        while consumer.is_alive():
+            consumer.join(timeout=0.5)
+            if consumer.is_alive():
+                try:
+                    with results_lock:
+                        done_now = len(results)
+                        cur_transcribed = sum(
+                            r.audio_s for r in results.values()
+                            if r and getattr(r, "audio_s", None)
+                        )
+                    tot = total_chunks_holder.get("n") or max(done_now, 1)
+                    cur_tot = round(time.monotonic() - t_start, 3)
+                    _publish_status(
+                        "transcribing",
+                        "decode",
+                        audio_s=d,
+                        segments=tot,
+                        segments_done=done_now,
+                        transcribed_audio_s=cur_transcribed,
+                        total_duration_s=cur_tot,
+                    )
+                except Exception:
+                    pass
         if consumer_fatal:
             raise consumer_fatal[0]
 
@@ -2504,10 +2595,13 @@ def run_background_recording(args: argparse.Namespace) -> int:
         text_holder["text"] = text
         print(text or "[no speech detected]", flush=True)
 
+        final_total_s = round(time.monotonic() - t_start, 3)
+        run_state["total_duration_s"] = final_total_s
+
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
             t_ins_0 = time.monotonic()
             if insert_text(text, args, raise_errors=True):
                 run_state["insert_ms"] = round((time.monotonic() - t_ins_0) * 1000.0, 3)
@@ -2518,10 +2612,12 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 raise RuntimeError("transcript insertion returned an unsuccessful result")
         elif text and not args.paste:
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
         elif text:
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
             notify(APP_NAME, "No speech detected.", args)
         outcome = "success"
         return 0

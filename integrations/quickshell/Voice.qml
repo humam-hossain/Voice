@@ -38,7 +38,7 @@ Singleton {
     property string ttsVoice: "af_heart"
     property string ttsBackend: "kokoro"
 
-    // Telemetry & Metrics
+    // Telemetry & Metrics (Strictly Controlled by voice.py)
     property int elapsedSeconds: 0
     property real elapsedMs: 0
     property string formattedDuration: "0:00"
@@ -58,6 +58,7 @@ Singleton {
 
     // Formatting Helper
     function formatDuration(sec) {
+        if (sec === undefined || sec === null || isNaN(sec)) return "0:00";
         const sInt = Math.max(0, Math.floor(sec));
         const m = Math.floor(sInt / 60);
         const s = sInt % 60;
@@ -108,14 +109,7 @@ Singleton {
         blockLoading: true
     }
 
-    FileView {
-        id: uptimeFile
-        path: "/proc/uptime"
-        printErrors: false
-        blockLoading: true
-    }
-
-    // Visual Linger Timer for Rapid Typing
+    // Visual Linger Timer for Rapid Typing (5000ms)
     Timer {
         id: typingLingerTimer
         interval: 5000
@@ -143,72 +137,12 @@ Singleton {
         statusReportPath = "";
     }
 
-    // Recover Start Time on Shell Reload
-    function recoverStartTime(pid) {
-        if (pid > 0) {
-            sttStatFile.reload();
-            uptimeFile.reload();
-            const statText = sttStatFile.text().trim();
-            const uptimeText = uptimeFile.text().trim();
-            const lastParen = statText.lastIndexOf(")");
-            if (lastParen !== -1 && uptimeText.length > 0) {
-                const rest = statText.substring(lastParen + 1).trim().split(/\s+/);
-                const startTicks = parseFloat(rest[19]); // Index 19 after comm is field 22
-                const uptimeSec = parseFloat(uptimeText.split(/\s+/)[0]);
-                if (!isNaN(startTicks) && !isNaN(uptimeSec)) {
-                    const elapsedSec = Math.max(0, uptimeSec - (startTicks / 100.0));
-                    if (!isNaN(elapsedSec) && elapsedSec >= 0 && elapsedSec < maxDurationSeconds) {
-                        return Date.now() - (elapsedSec * 1000);
-                    }
-                }
-            }
-        }
-        return Date.now();
-    }
-
-    function updateDuration() {
-        if (overallState === "recording" || overallState === "speaking") {
-            typingDurationCaptured = false;
-            if (startTime <= 0) {
-                const activePid = (overallState === "recording") ? sttPid : ttsPid;
-                startTime = Math.min(Date.now(), recoverStartTime(activePid));
-            }
-            const diff = Math.max(0, Date.now() - startTime);
-            elapsedMs = diff;
-            const sec = Math.floor(diff / 1000);
-            elapsedSeconds = sec;
-            formattedDuration = formatDuration(sec);
-            formattedRecordedDuration = formattedDuration;
-            totalElapsedSeconds = sec;
-            formattedTotalDuration = formattedDuration;
-        } else if (overallState === "transcribing") {
-            // Recorded duration remains frozen; wall-clock total continues ticking
-            if (startTime > 0) {
-                const totalDiff = Math.max(0, Date.now() - startTime);
-                totalElapsedSeconds = Math.floor(totalDiff / 1000);
-                formattedTotalDuration = formatDuration(totalElapsedSeconds);
-            }
-        } else if (overallState === "typing") {
-            // Total duration strictly measures start-of-recording to end-of-transcription;
-            // freeze upon entering typing state and do not advance with Date.now()
-            if (startTime > 0 && !typingDurationCaptured) {
-                const totalDiff = Math.max(0, Date.now() - startTime);
-                totalElapsedSeconds = Math.floor(totalDiff / 1000);
-                formattedTotalDuration = formatDuration(totalElapsedSeconds);
-                typingDurationCaptured = true;
-            }
-        } else if (overallState === "idle" && !typingLingerTimer.running) {
-            resetDuration();
-        }
-    }
-
     function openReport() {
         const target = statusReportPath.length > 0 ? statusReportPath : defaultReportPath;
         if (target.startsWith(runtimeDir) && target.endsWith("report.html")) {
-            const opened = Qt.openUrlExternally("file://" + target);
-            if (!opened) {
-                Quickshell.execDetached(["xdg-open", target]);
-            }
+            Qt.openUrlExternally("file://" + target);
+        } else {
+            console.warn("[Voice] Refusing to open untrusted report target: " + target);
         }
     }
 
@@ -217,47 +151,59 @@ Singleton {
         ttsFile.reload();
         statusFile.reload();
 
+        // 0. Parse status.json safely
         let st = null;
-        const statusText = statusFile.text().trim();
-        if (statusText.length > 0) {
-            try {
-                st = JSON.parse(statusText);
-            } catch (e) {
-                st = null;
+        try {
+            const raw = statusFile.text().trim();
+            if (raw.length > 0) {
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.schema === 1) {
+                    st = parsed;
+                }
             }
+        } catch (e) {
+            st = null;
         }
+
+        const nowSec = Date.now() / 1000.0;
+        const isExpired = Boolean(st && st.expires_at && (nowSec > (st.expires_at + 1.0)));
 
         const recText = recorderFile.text().trim();
         const ttsText = ttsFile.text().trim();
 
-        // 1. STT State Evaluation
+        // 1. STT State Evaluation (Passive Observer - Never Deletes PID Files)
         if (recText.length > 0) {
             const parts = recText.split(/\s+/);
             const pid = parseInt(parts[0]);
             let rawState = parts[1] || "recording";
-            if (st && st.state && typeof st.state === "string") {
-                rawState = st.state;
-            }
 
             if (!isNaN(pid) && pid > 0) {
-                root.sttPid = pid;
-                sttCmdlineFile.reload();
-                const cmdline = sttCmdlineFile.text().toLowerCase();
-
-                if (!cmdline || (!cmdline.includes("voice") && !cmdline.includes("voicemode"))) {
-                    console.warn("[Voice] Purged stale PID lock: " + pid);
-                    Quickshell.execDetached(["rm", "-f", root.recorderPidPath]);
-                    root.sttPid = 0;
-                    if (root.sttState === "transcribing") {
-                        root.sttState = "typing";
-                        typingLingerTimer.restart();
-                    } else if (!typingLingerTimer.running) {
-                        root.sttState = "idle";
+                // Check process liveness safely via procfs
+                if (root.sttPid === pid) {
+                    sttStatFile.reload();
+                    const procAlive = sttStatFile.text().trim().length > 0;
+                    if (!procAlive) {
+                        root.sttPid = 0;
+                        if (root.sttState === "transcribing") {
+                            root.sttState = "typing";
+                            typingLingerTimer.restart();
+                        } else if (!typingLingerTimer.running) {
+                            root.sttState = "idle";
+                        }
                     }
                 } else {
+                    root.sttPid = pid;
+                }
+
+                if (root.sttPid > 0) {
+                    if (st && !isExpired && st.pid === pid) {
+                        rawState = st.state;
+                    }
                     if (rawState === "typing") {
                         root.sttState = "typing";
-                        typingLingerTimer.restart();
+                        if (!typingLingerTimer.running) {
+                            typingLingerTimer.restart();
+                        }
                     } else if (root.sttState !== "typing" || !typingLingerTimer.running) {
                         root.sttState = rawState;
                     }
@@ -269,8 +215,15 @@ Singleton {
                 }
             }
         } else {
-            if (st && st.state && typeof st.state === "string" && st.state !== "idle") {
-                root.sttState = st.state;
+            if (st && !isExpired && typeof st.state === "string" && st.state !== "idle") {
+                if (st.state === "typing") {
+                    root.sttState = "typing";
+                    if (!typingLingerTimer.running) {
+                        typingLingerTimer.restart();
+                    }
+                } else if (root.sttState !== "typing" || !typingLingerTimer.running) {
+                    root.sttState = st.state;
+                }
                 if (st.pid && st.pid > 0) {
                     root.sttPid = st.pid;
                 }
@@ -283,50 +236,55 @@ Singleton {
             }
         }
 
-        // Process status.json payload properties
-        if (st) {
-            if (st.audio_s !== undefined && st.audio_s !== null && st.audio_s > 0) {
+        // 2. Process status.json payload properties (100% telemetry-driven by voice.py)
+        if (st && !isExpired && (root.sttState !== "idle" || typingLingerTimer.running)) {
+            if (st.audio_s !== undefined && st.audio_s !== null && st.audio_s >= 0) {
                 root.recordedAudioSeconds = st.audio_s;
-                root.formattedRecordedDuration = formatDuration(Math.floor(st.audio_s));
+                root.formattedRecordedDuration = formatDuration(st.audio_s);
             }
-            if (st.transcribed_audio_s !== undefined && st.transcribed_audio_s !== null && st.transcribed_audio_s > 0) {
+            if (st.transcribed_audio_s !== undefined && st.transcribed_audio_s !== null && st.transcribed_audio_s >= 0) {
                 root.transcribedAudioSeconds = st.transcribed_audio_s;
-                root.formattedTranscribedDuration = formatDuration(Math.floor(st.transcribed_audio_s));
+                root.formattedTranscribedDuration = formatDuration(st.transcribed_audio_s);
             }
+            if (st.total_duration_s !== undefined && st.total_duration_s !== null && st.total_duration_s >= 0) {
+                root.totalElapsedSeconds = Math.floor(st.total_duration_s);
+                root.formattedTotalDuration = formatDuration(st.total_duration_s);
+            } else {
+                root.formattedTotalDuration = root.formattedRecordedDuration;
+            }
+            root.formattedDuration = root.formattedRecordedDuration;
             if (st.report_path !== undefined && st.report_path !== null && typeof st.report_path === "string") {
                 root.statusReportPath = st.report_path;
             }
         }
 
-        // 2. TTS State Evaluation
+        // 3. TTS State Evaluation
         if (ttsText.length > 0) {
             const parts = ttsText.split(/\s+/);
             const pid = parseInt(parts[0]);
 
             if (!isNaN(pid) && pid > 0) {
                 root.ttsPid = pid;
-                ttsCmdlineFile.reload();
-                const cmdline = ttsCmdlineFile.text();
-
-                if (!cmdline || (!cmdline.toLowerCase().includes("voice") && !cmdline.toLowerCase().includes("voicemode"))) {
-                    console.warn("[Voice] Purged stale PID lock: " + pid);
-                    Quickshell.execDetached(["rm", "-f", root.ttsPidPath]);
-                    root.ttsPid = 0;
-                    root.ttsState = "idle";
-                } else {
-                    root.ttsState = "speaking";
-                    const args = cmdline.split("\0");
-                    let voice = "af_heart";
-                    let backend = "kokoro";
-                    for (let i = 0; i < args.length; i++) {
-                        if (args[i] === "--tts-voice" && i + 1 < args.length) {
-                            voice = args[i + 1];
-                        } else if (args[i] === "--tts-backend" && i + 1 < args.length) {
-                            backend = args[i + 1];
+                if (root.ttsPid === pid) {
+                    ttsCmdlineFile.reload();
+                    const cmdline = ttsCmdlineFile.text();
+                    if (cmdline && (cmdline.toLowerCase().includes("voice") || cmdline.toLowerCase().includes("voicemode"))) {
+                        root.ttsState = "speaking";
+                        const args = cmdline.split("\0");
+                        let voice = "af_heart";
+                        let backend = "kokoro";
+                        for (let i = 0; i < args.length; i++) {
+                            if (args[i] === "--tts-voice" && i + 1 < args.length) {
+                                voice = args[i + 1];
+                            } else if (args[i] === "--tts-backend" && i + 1 < args.length) {
+                                backend = args[i + 1];
+                            }
                         }
+                        root.ttsVoice = voice;
+                        root.ttsBackend = backend;
+                    } else {
+                        root.ttsState = "speaking";
                     }
-                    root.ttsVoice = voice;
-                    root.ttsBackend = backend;
                 }
             } else {
                 root.ttsState = "idle";
@@ -337,18 +295,10 @@ Singleton {
             root.ttsPid = 0;
         }
 
+        // Reset durations when idle and not lingering
         if (root.sttState === "idle" && root.ttsState === "idle" && !typingLingerTimer.running) {
-            root.recordedAudioSeconds = 0.0;
-            root.formattedRecordedDuration = "0:00";
-            root.transcribedAudioSeconds = 0.0;
-            root.formattedTranscribedDuration = "0:00";
-            root.totalElapsedSeconds = 0;
-            root.formattedTotalDuration = "0:00";
-            root.statusReportPath = "";
-            root.typingDurationCaptured = false;
+            root.resetDuration();
         }
-
-        root.updateDuration();
     }
 
     Timer {

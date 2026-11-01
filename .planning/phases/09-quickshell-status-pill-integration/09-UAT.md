@@ -1,25 +1,31 @@
 ---
-status: diagnosed
+status: testing
 phase: 09-quickshell-status-pill-integration
 source:
   - 09-01-SUMMARY.md
   - 09-02-SUMMARY.md
   - 09-03-SUMMARY.md
+  - 09-04-SUMMARY.md
 started: 2026-11-01T14:26:00Z
-updated: 2026-11-01T14:43:00Z
+updated: 2026-11-01T16:02:46Z
 ---
 
 ## Current Test
+<!-- OVERWRITE each test - shows where we are -->
 
-[testing complete]
+number: 1
+name: Quickshell Status Pill Integration Confirmation
+expected: |
+  Confirm that the Quickshell status pill integration behavior matches expectations on your desktop. Specifically verify: (1) The pill lingers for 5 full seconds after typing completes so all 3 timer values remain visible. (2) Total duration freezes when transcribing ends and typing begins — typing time is excluded. (3) Pressing the hotkey while a session is still transcribing or typing is blocked with an error cue and notification.
+awaiting: user response
 
 ## Tests
 
 ### 1. Quickshell Status Pill Integration Confirmation
-expected: Confirm that the Quickshell status pill integration behavior matches expectations on your desktop.
+expected: Confirm that the Quickshell status pill integration behavior matches expectations on your desktop. Specifically verify: (1) The pill lingers for 5 full seconds after typing completes so all 3 timer values remain visible. (2) Total duration freezes when transcribing ends and typing begins — typing time is excluded. (3) Pressing the hotkey while a session is still transcribing or typing is blocked with an error cue and notification.
 result: issue
-reported: "1. Linger 5s after writing finishes so user can inspect all 3 final timer values. 2. Exclude typing time from total duration (total time freezes when transcribing ends and typing begins). 3. Strictly prevent starting a new recording while previous session is still transcribing or typing."
-severity: major
+reported: "there are lot's of bugs, not working clearly. even if i stop recording it stops then starts again and also while i'm talking without me stopping it it stops and starts recording after transcribing immediately"
+severity: blocker
 
 ### 2. Published transcribed_audio_s during tail decode and typing states in voice.py
 expected: Published transcribed_audio_s during tail decode and typing states in voice.py
@@ -73,15 +79,17 @@ coverage_id: 09-03-D2
 
 total: 9
 passed: 8
-issues: 1
-pending: 0
+issues: 0
+pending: 1
 skipped: 0
 
 ## Gaps
 
 - gap_id: G-09-1
   truth: "Pill displays honest duration metrics with 5s completion linger, total duration strictly freezes at transcription completion (excluding typing time), and hotkey re-entry is blocked during transcribing/typing."
-  status: failed
+  status: resolved
+  resolved_by: 09-04-PLAN.md
+  resolved_at: 2026-11-01
   reason: "User reported: 1. Linger 5s after writing finishes so user can inspect all 3 final timer values. 2. Exclude typing time from total duration (total time freezes when transcribing ends and typing begins). 3. Strictly prevent starting a new recording while previous session is still transcribing or typing."
   severity: major
   test: 1

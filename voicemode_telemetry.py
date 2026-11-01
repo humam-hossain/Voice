@@ -501,7 +501,7 @@ def with_pid_lock(lock_path: Optional[Path] = None) -> Iterator[None]:
 STATUS_V1_KEYS = [
     "schema", "pid", "run_id", "state", "phase", "started_at", "updated_at",
     "expires_at", "audio_s", "segments", "segments_done", "transcribed_audio_s",
-    "report_path",
+    "total_duration_s", "report_path",
 ]
 PID_STATES = ("starting", "recording", "transcribing", "typing", "speaking")
 STATUS_PHASES = ("init", "capture", "finalize", "load", "decode", "insert", "wrap-up")
@@ -512,7 +512,7 @@ STATUS_MAX_BYTES = 1024
 
 def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expires_at=None,
                   audio_s=0.0, segments=0, segments_done=0, transcribed_audio_s=None,
-                  report_path=None, **kwargs):
+                  total_duration_s=None, report_path=None, **kwargs):
     now = time.time()
     if updated_at is None:
         updated_at = now
@@ -537,6 +537,13 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
             transcribed_audio_s_r = None
     else:
         transcribed_audio_s_r = None
+    if total_duration_s is not None:
+        try:
+            total_duration_s_r = round(max(0.0, float(total_duration_s)), 3)
+        except Exception:
+            total_duration_s_r = None
+    else:
+        total_duration_s_r = None
     if expires_at is None:
         expires_at = round(float(updated_at) + STATUS_TTL_S, 3)
     else:
@@ -558,6 +565,7 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
     status["segments"] = segments_i
     status["segments_done"] = segments_done_i
     status["transcribed_audio_s"] = transcribed_audio_s_r
+    status["total_duration_s"] = total_duration_s_r
     status["report_path"] = report_path
     return validate_status(status)
 

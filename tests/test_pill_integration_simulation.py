@@ -361,3 +361,46 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
                 cur_pid, cur_state = voice.read_pid_state()
                 self.assertEqual(cur_pid, pid)
                 self.assertEqual(cur_state, busy_state)
+
+    def test_qml_contains_no_rm_commands(self):
+        """Verify Voice.qml never unlinks backend PID lock files."""
+        for path in (
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/services/Voice.qml"),
+            Path("integrations/quickshell/Voice.qml"),
+        ):
+            text = path.read_text(encoding="utf-8")
+            self.assertIsNone(re.search(r'\brm\b', text), f"{path} must not contain any rm commands")
+            self.assertNotIn("execDetached", text, f"{path} must not spawn detached shell commands")
+
+    def test_total_duration_s_in_status_contract(self):
+        """Verify total_duration_s is published and tracked in status.json."""
+        self.assertIn("total_duration_s", voicemode_telemetry.STATUS_V1_KEYS)
+        s = voicemode_telemetry.build_status(
+            pid=123,
+            run_id="run_tot_01",
+            state="recording",
+            phase="capture",
+            started_at=1000.0,
+            audio_s=4.5,
+            total_duration_s=4.5,
+        )
+        self.assertEqual(s["total_duration_s"], 4.5)
+        voicemode_telemetry.validate_status(s)
+
+    def test_toggle_recovers_worker_when_pid_file_missing(self):
+        """Verify toggle_background_recording recovers active worker from process table when recorder.pid is absent."""
+        voice.remove_pid()
+        args = voice.parse_args([])
+
+        with patch("voice.find_active_recorder_pid", return_value=54321), \
+             patch("voice.process_alive", return_value=True), \
+             patch("os.kill") as mock_kill, \
+             patch("voice.subprocess.Popen") as mock_popen:
+            res = voice.toggle_background_recording(args)
+            self.assertEqual(res, 0)
+            mock_kill.assert_called_once_with(54321, signal.SIGUSR1)
+            mock_popen.assert_not_called()
+
+        pid, state = voice.read_pid_state()
+        self.assertEqual(pid, 54321)
+        self.assertEqual(state, "transcribing")
