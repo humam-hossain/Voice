@@ -68,11 +68,11 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Quickshell Integration (UI)
 
-- [ ] **UI-01**: `VoicePill` displays live progress timers instead of static text (`"Transcribing..."`, `"Typing..."`); dual progress (`recorded | transcribed`) during recording, immediately switching to 3-bar progress (`recorded | transcribed | total`) on stop/transcription and during typing.
-- [ ] **UI-02**: State-synchronized styling: full color matching across text and glyphs (STT sky blue for decode, neon green for typing/writing with `edit` pen glyph, dual alternating pulse while recording+transcribing).
-- [ ] **UI-03**: Layout stability and validity gate: stable pill width without horizontal jitter as digits tick; unknown or stale status handled cleanly without hanging in ghost states.
-- [ ] **UI-04**: Click during transcribing/typing/wrap-up opens the latency report; inert during recording; the path is validated.
-- [ ] **UI-05**: Live QML is committed in `~/.dotfiles` (`restow/quickshell/...`); a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative.
+- [x] **UI-01**: `VoicePill` displays live progress timers instead of static text (`"Transcribing..."`, `"Typing..."`); dual progress (`recorded | transcribed`) during recording, immediately switching to 3-bar progress (`recorded | transcribed | total`) on stop/transcription and during typing.
+- [x] **UI-02**: State-synchronized styling: full color matching across text and glyphs (STT sky blue for decode, neon green for typing/writing with `edit` pen glyph, dual alternating pulse while recording+transcribing).
+- [x] **UI-03**: Layout stability and validity gate: stable pill width without horizontal jitter as digits tick; unknown or stale status handled cleanly without hanging in ghost states.
+- [x] **UI-04**: Click during transcribing/typing/wrap-up opens the latency report; inert during recording; the path is validated.
+- [x] **UI-05**: Live QML is committed in `~/.dotfiles` (`restow/quickshell/...`); a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative.
 
 ### Accuracy & Portability (ACC)
 
@@ -173,11 +173,11 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | RPT-04 | 8 | Complete |
 | RPT-05 | 8 | Complete |
 | RPT-06 | 8 | Complete |
-| UI-01 | 9 | Pending |
-| UI-02 | 9 | Pending |
-| UI-03 | 9 | Pending |
-| UI-04 | 9 | Pending |
-| UI-05 | 9 | Pending |
+| UI-01 | 9 | Complete |
+| UI-02 | 9 | Complete |
+| UI-03 | 9 | Complete |
+| UI-04 | 9 | Complete |
+| UI-05 | 9 | Complete |
 | ACC-01 | 10 | Pending |
 | ACC-02 | 10 | Pending |
 | ACC-03 | 10 | Pending |

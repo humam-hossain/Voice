@@ -29,7 +29,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 - [x] **Phase 6: Foundations, Ledger & Status Contract** - Freeze the schema and status contract, fix lifecycle races, and instrument honest stage timings.
 - [x] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate. — completed 2026-10-29
 - [x] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports. (completed 2026-10-30)
-- [ ] **Phase 9: Quickshell Status Pill Integration** - Replace static labels with dual/triple live progress timers, state-matched glyphs and colors (sky blue for STT, neon green for typing), and report click-through.
+- [x] **Phase 9: Quickshell Status Pill Integration** - Replace static labels with dual/triple live progress timers, state-matched glyphs and colors (sky blue for STT, neon green for typing), and report click-through. (completed 2026-11-01)
 - [ ] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix.
 - [ ] **Phase 11: Voice Desktop Pop-up UI** - Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry.
 
@@ -184,6 +184,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
 | 7. ETA Engine & Calibration | v1.1 | 4/4 | Complete    | 2026-10-29 |
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
-| 9. Quickshell Status Pill Integration | v1.1 | 3/3 | In Progress|  |
+| 9. Quickshell Status Pill Integration | v1.1 | 3/3 | Complete    | 2026-11-01 |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |
 | 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |
