@@ -1,6 +1,6 @@
 ---
 phase: 09-quickshell-status-pill-integration
-verified: 2026-11-01T14:21:00Z
+verified: 2026-11-01T18:28:00Z
 status: passed
 score: 5/5 requirements verified
 ---
@@ -8,7 +8,7 @@ score: 5/5 requirements verified
 # Phase 09: Quickshell Status Pill Integration Verification Report
 
 **Phase Goal:** Update the live desktop status pill UI in Quickshell to display real-time dual/triple progress timers with synchronized colors and glyphs, eliminate horizontal jitter, provide click-through report opening, and establish authoritative dotfiles versioning with vendored repository mirrors.
-**Verified:** 2026-11-01T14:21:00Z
+**Verified:** 2026-11-01T18:28:00Z
 **Status:** passed
 
 ---
@@ -32,7 +32,14 @@ In Plan 09-03, multi-repo synchronization and documentation were completed:
 - Created exact byte-identical vendored copies under `integrations/quickshell/Voice.qml` and `integrations/quickshell/VoicePill.qml`.
 - Created `integrations/quickshell/README.md` documenting architecture, authoritative dotfiles hierarchy, synchronization workflow, IPC contract, and clipboard paste recommendation.
 
-All 224 automated tests across the test suite pass cleanly and hermetically.
+In Plan 09-04 and subsequent UAT remediation:
+- Extended completion linger timer to 5000ms across `Voice.qml` and `VoicePill.qml` so users can inspect final metrics.
+- Excluded typing time from total duration by freezing `total_duration_s` at transcription completion.
+- Eliminated all local timer calculations (`Date.now() - startTime`) and `rm -f` commands in Quickshell, making the UI 100% reactive to backend telemetry (`status.json`).
+- Added singleton process-table scanning (`find_active_recorder_pid()`) to prevent duplicate runaway worker processes.
+- Ensured any new recording session immediately cuts short active 5s lingers and resets timers to clean `0:00 | 0:00`.
+
+All 231 automated tests across the test suite pass cleanly and hermetically.
 
 ---
 
@@ -46,7 +53,7 @@ All 5 requirements allocated to Phase 09 are implemented, tested, and verified:
 | **UI-02** | State-synchronized styling: full color matching across text and glyphs (STT sky blue `#38bdf8` for decode, neon green `#4ade80` for typing/writing with `edit` pen glyph, dual alternating pulse while recording+transcribing). | `VoicePill.qml:currentColor`, `pulseAnimation`, `pulsedColor` | `tests/test_pill_integration_simulation.py::TestPillIntegrationSimulation.test_full_lifecycle_status_snapshots` | PASS |
 | **UI-03** | Layout stability and validity gate: stable pill width without horizontal jitter as digits tick; unknown or stale status handled cleanly without hanging in ghost states. | `VoicePill.qml:voiceLabel` (`font.features: { 'tnum': 1 }`, `font.family: numbers`), `Voice.qml:poll`, `typingLingerTimer` | `tests/test_pill_integration_simulation.py::TestPillIntegrationSimulation.test_timer_formatting_contract`, `tests/test_status_contract.py::TestStatusContract.test_typing_state_publishes_transcribed_audio_s_and_audio_s` | PASS |
 | **UI-04** | Click during transcribing/typing/wrap-up opens the latency report; inert during recording; the path is validated. | `Voice.qml:openReport`, `VoicePill.qml:pillMouseArea` | `tests/test_pill_integration_simulation.py::TestPillIntegrationSimulation.test_report_path_safety_validation` | PASS |
-| **UI-05** | Live QML is committed in `~/.dotfiles` (`restow/quickshell/...`); a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative. | `.dotfiles` commit `9c91084a`, `integrations/quickshell/Voice.qml`, `integrations/quickshell/VoicePill.qml`, `integrations/quickshell/README.md` | `diff -u` verification check between dotfiles and repository copies; `tests/` suite execution | PASS |
+| **UI-05** | Live QML is committed in `~/.dotfiles` (`restow/quickshell/...`); a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative. | `.dotfiles` commit `9c91084a` (and `e2f4e67c`), `integrations/quickshell/Voice.qml`, `integrations/quickshell/VoicePill.qml`, `integrations/quickshell/README.md` | `diff -u` verification check between dotfiles and repository copies; `tests/` suite execution | PASS |
 
 ---
 
@@ -58,27 +65,27 @@ platform linux -- Python 3.12.12, pytest-9.2.0, pluggy-1.7.0
 rootdir: /home/pera/github_repo/Voice
 configfile: pyproject.toml
 plugins: anyio-4.15.1
-collected 224 items
+collected 231 items
 
-224 passed in 8.75s
-============================== 224 passed in 8.75s ==============================
+231 passed in 13.83s
+============================= 231 passed in 13.83s =============================
 ```
 
 - `tests/test_status_contract.py` (16 tests): Validates atomic publishing, schema closure (`STATUS_V1_KEYS`), duration field retention during tail decode, and duration equality during typing transitions.
-- `tests/test_pill_integration_simulation.py` (3 tests): Simulates complete lifecycle state transitions (`recording` -> `concurrent decode` -> `tail decode` -> `typing` -> `idle`), verifies duration string formatting, and verifies report path security traversal rejection.
+- `tests/test_pill_integration_simulation.py` (10 tests): Simulates complete lifecycle state transitions (`recording` -> `concurrent decode` -> `tail decode` -> `typing` -> `idle`), verifies duration string formatting, report path security traversal rejection, linger cut-off on rapid re-recording, and absence of `rm` shell invocations.
 - All regression suites (`tests/test_report.py`, `tests/test_telemetry.py`, `tests/test_timing.py`, `tests/test_tts_pipeline.py`, `tests/test_verification_doctor.py`, `tests/test_wayland_input.py`, `tests/test_audio_chunking.py`, `tests/test_hyprland_daemon.py`, `tests/test_incremental_transcription.py`, `tests/test_lifecycle_outcomes.py`, `tests/test_pid_race.py`): 205 tests passing hermetically.
 
 ---
 
 ## 3. Success Criteria Verification
 
-1. **Continuous Duration Telemetry:** Verified. `voice.py` publishes `transcribed_audio_s` continuously during tail decode and typing.
+1. **Continuous Duration Telemetry:** Verified. `voice.py` publishes `transcribed_audio_s` and `total_duration_s` continuously during recording, tail decode, and typing.
 2. **Dual & Triple Progress Timers:** Verified. `VoicePill.qml` renders `recorded | transcribed` while recording and `recorded | transcribed | total` during tail decode and typing.
 3. **Synchronized State Colors:** Verified. Sky Blue (`#38bdf8`) for STT decode, Neon Green (`#4ade80`) for typing/wrapup, and smooth breathing pulse during concurrent decode.
 4. **Material Symbol Glyph Transition:** Verified. Shifts from `graphic_eq` to `edit` pen during typing and wrapup.
 5. **Jitter-Free Layout:** Verified. Tabular numeral font feature (`font.features: { 'tnum': 1 }`) ensures stable advance widths as timers tick.
 6. **Secure Report Launch:** Verified. Path validation rejects traversals and non-local schemes before invoking `Qt.openUrlExternally` / `xdg-open`.
-7. **Authoritative Versioning & Vendoring:** Verified. Live files committed in `.dotfiles` (`9c91084a`), byte-identical vendored copies established in `integrations/quickshell/`, and sync workflow documented.
+7. **Authoritative Versioning & Vendoring:** Verified. Live files committed in `.dotfiles` (`e2f4e67c`), byte-identical vendored copies established in `integrations/quickshell/`, and sync workflow documented.
 
 ---
 
