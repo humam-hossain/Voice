@@ -2313,16 +2313,21 @@ def run_background_recording(args: argparse.Namespace) -> int:
 
             with results_lock:
                 done = len(results)
+                transcribed_s = sum(
+                    r.audio_s for r in results.values()
+                    if r and getattr(r, "audio_s", None)
+                )
             if capture_closed.is_set():
                 tot = total_chunks_holder["n"] or max(done, 1)
-                _publish_status("transcribing", "decode", segments=tot, segments_done=done)
+                _publish_status(
+                    "transcribing",
+                    "decode",
+                    segments=tot,
+                    segments_done=done,
+                    transcribed_audio_s=transcribed_s,
+                )
             else:
                 # Publish incremental transcription progress while still recording
-                with results_lock:
-                    transcribed_s = sum(
-                        r.audio_s for r in results.values()
-                        if r and getattr(r, "audio_s", None)
-                    )
                 _publish_status(
                     "recording",
                     "capture",
@@ -2497,7 +2502,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert")
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d)
             t_ins_0 = time.monotonic()
             if insert_text(text, args, raise_errors=True):
                 run_state["insert_ms"] = round((time.monotonic() - t_ins_0) * 1000.0, 3)
@@ -2508,7 +2513,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 raise RuntimeError("transcript insertion returned an unsuccessful result")
         elif text and not args.paste:
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert")
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d)
         elif text:
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:
