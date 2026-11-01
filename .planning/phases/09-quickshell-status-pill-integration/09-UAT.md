@@ -16,16 +16,25 @@ updated: 2026-11-01T16:02:46Z
 number: 1
 name: Quickshell Status Pill Integration Confirmation
 expected: |
-  Confirm that the Quickshell status pill integration behavior matches expectations on your desktop. Specifically verify: (1) The pill lingers for 5 full seconds after typing completes so all 3 timer values remain visible. (2) Total duration freezes when transcribing ends and typing begins — typing time is excluded. (3) Pressing the hotkey while a session is still transcribing or typing is blocked with an error cue and notification.
+  Confirm that the Quickshell status pill integration behavior matches expectations on your desktop:
+  (1) Timers are 100% controlled by voice.py: when recording is not active, no timers tick; when recording, recorded and total durations reflect live audio.
+  (2) When transcription ends and typing begins, total duration strictly freezes and typing time is excluded.
+  (3) The pill lingers for 5 seconds after typing finishes showing all 3 final timer values before resetting to idle.
+  (4) Hotkey re-entry during transcribing/typing is cleanly blocked with an error cue and notification.
+  (5) No runaway background workers or uncoordinated duplicate recordings can ever be spawned.
 awaiting: user response
 
 ## Tests
 
 ### 1. Quickshell Status Pill Integration Confirmation
-expected: Confirm that the Quickshell status pill integration behavior matches expectations on your desktop. Specifically verify: (1) The pill lingers for 5 full seconds after typing completes so all 3 timer values remain visible. (2) Total duration freezes when transcribing ends and typing begins — typing time is excluded. (3) Pressing the hotkey while a session is still transcribing or typing is blocked with an error cue and notification.
-result: issue
-reported: "there are lot's of bugs, not working clearly. even if i stop recording it stops then starts again and also while i'm talking without me stopping it it stops and starts recording after transcribing immediately"
-severity: blocker
+expected: |
+  Confirm that the Quickshell status pill integration behavior matches expectations on your desktop:
+  (1) Timers are 100% controlled by voice.py: when recording is not active, no timers tick; when recording, recorded and total durations reflect live audio.
+  (2) When transcription ends and typing begins, total duration strictly freezes and typing time is excluded.
+  (3) The pill lingers for 5 seconds after typing finishes showing all 3 final timer values before resetting to idle.
+  (4) Hotkey re-entry during transcribing/typing is cleanly blocked with an error cue and notification.
+  (5) No runaway background workers or uncoordinated duplicate recordings can ever be spawned.
+result: [pending]
 
 ### 2. Published transcribed_audio_s during tail decode and typing states in voice.py
 expected: Published transcribed_audio_s during tail decode and typing states in voice.py
@@ -105,3 +114,26 @@ skipped: 0
     - "Set wrapUpTimer and typingLingerTimer intervals to 5000ms across Voice.qml and VoicePill.qml"
     - "Freeze totalElapsedSeconds at transcription completion in Voice.qml so typing duration is excluded from total"
     - "Write transcribing state under with_pid_lock when signaling stop in toggle_background_recording to prevent re-trigger races"
+
+- gap_id: G-09-2
+  truth: "Quickshell status pill is 100% telemetry-driven by voice.py without local timer drift, never deletes backend PID files, and voice.py enforces singleton recording across system processes."
+  status: resolved
+  resolved_by: "commit 6a6abe7"
+  resolved_at: 2026-11-01
+  reason: "User reported: timer runs when no recording is happening; Quickshell deleted PID files; duplicate workers spawned and could not be stopped."
+  severity: blocker
+  test: 1
+  root_cause: "1) Voice.qml ran local Date.now() timer loops in updateDuration() and recoverStartTime() instead of relying on status.json; 2) Voice.qml executed rm -f recorderPidPath on cmdline FileView timing race; 3) voice.py lacked process-table scan fallback when recorder.pid was missing."
+  artifacts:
+    - path: "integrations/quickshell/Voice.qml"
+      issue: "Local timer ticking, rm -f PID deletion, lack of status expiry checking"
+    - path: "voice.py"
+      issue: "Lack of process-table worker scan in toggle_background_recording and run_background_recording; 5s heartbeat interval too slow for live UI"
+    - path: "voicemode_telemetry.py"
+      issue: "STATUS_V1_KEYS lacks total_duration_s"
+  missing:
+    - "Add total_duration_s to STATUS_V1_KEYS and build_status in voicemode_telemetry.py"
+    - "Publish total_duration_s and 0.5s heartbeat in voice.py"
+    - "Scan /proc for existing --record-background in toggle_background_recording and run_background_recording"
+    - "Refactor Voice.qml to be purely reactive to status.json metrics (no Date.now ticking, no rm -f, strict PID liveness/expiry check)"
+    - "Update test_pill_integration_simulation.py and unit tests"
