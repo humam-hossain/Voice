@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -217,3 +220,144 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
         # 3-bar progress timer contract test
         triple = f"{format_duration(6)} | {format_duration(6)} | {format_duration(8)}"
         self.assertEqual(triple, "0:06 | 0:06 | 0:08")
+
+    def test_qml_timer_intervals_and_parity(self):
+        """Verify 5000ms intervals on wrapUpTimer and typingLingerTimer with zero dotfiles diff."""
+        dotfiles_voice = Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/services/Voice.qml")
+        dotfiles_pill = Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml")
+        vendored_voice = Path("integrations/quickshell/Voice.qml")
+        vendored_pill = Path("integrations/quickshell/VoicePill.qml")
+
+        self.assertTrue(dotfiles_voice.exists(), "dotfiles Voice.qml must exist")
+        self.assertTrue(dotfiles_pill.exists(), "dotfiles VoicePill.qml must exist")
+        self.assertTrue(vendored_voice.exists(), "vendored Voice.qml must exist")
+        self.assertTrue(vendored_pill.exists(), "vendored VoicePill.qml must exist")
+
+        # Byte-identical parity (D-05)
+        self.assertEqual(dotfiles_voice.read_bytes(), vendored_voice.read_bytes(), "Voice.qml divergence detected")
+        self.assertEqual(dotfiles_pill.read_bytes(), vendored_pill.read_bytes(), "VoicePill.qml divergence detected")
+
+        # 5000ms intervals (D-01)
+        voice_text = vendored_voice.read_text(encoding="utf-8")
+        pill_text = vendored_pill.read_text(encoding="utf-8")
+
+        # typingLingerTimer in Voice.qml
+        linger_match = re.search(r'id:\s*typingLingerTimer\s+interval:\s*(\d+)', voice_text)
+        self.assertIsNotNone(linger_match, "typingLingerTimer not found in Voice.qml")
+        self.assertEqual(int(linger_match.group(1)), 5000, "typingLingerTimer interval must be 5000ms")
+
+        # wrapUpTimer in VoicePill.qml
+        wrapup_match = re.search(r'id:\s*wrapUpTimer\s+interval:\s*(\d+)', pill_text)
+        self.assertIsNotNone(wrapup_match, "wrapUpTimer not found in VoicePill.qml")
+        self.assertEqual(int(wrapup_match.group(1)), 5000, "wrapUpTimer interval must be 5000ms")
+
+    def test_total_duration_freezes_during_typing(self):
+        """Simulate Voice.qml updateDuration: total elapsed freezes upon entering typing (D-02)."""
+        class VoiceDurationSimulator:
+            def __init__(self):
+                self.overallState = "idle"
+                self.startTime = 0.0
+                self.totalElapsedSeconds = 0
+                self.formattedTotalDuration = "0:00"
+                self.typingDurationCaptured = False
+
+            def updateDuration(self, now: float):
+                if self.overallState in ("recording", "speaking"):
+                    self.typingDurationCaptured = False
+                    if self.startTime <= 0:
+                        self.startTime = now
+                    diff = max(0.0, now - self.startTime)
+                    self.totalElapsedSeconds = int(diff)
+                    self.formattedTotalDuration = format_duration(self.totalElapsedSeconds)
+                elif self.overallState == "transcribing":
+                    if self.startTime > 0:
+                        diff = max(0.0, now - self.startTime)
+                        self.totalElapsedSeconds = int(diff)
+                        self.formattedTotalDuration = format_duration(self.totalElapsedSeconds)
+                elif self.overallState == "typing":
+                    if self.startTime > 0 and not self.typingDurationCaptured:
+                        diff = max(0.0, now - self.startTime)
+                        self.totalElapsedSeconds = int(diff)
+                        self.formattedTotalDuration = format_duration(self.totalElapsedSeconds)
+                        self.typingDurationCaptured = True
+
+        sim = VoiceDurationSimulator()
+        # Start recording at t = 1000.0
+        sim.overallState = "recording"
+        sim.updateDuration(1000.0)
+        self.assertEqual(sim.totalElapsedSeconds, 0)
+        self.assertEqual(sim.formattedTotalDuration, "0:00")
+
+        # Still recording at t = 1005.0
+        sim.updateDuration(1005.0)
+        self.assertEqual(sim.totalElapsedSeconds, 5)
+        self.assertEqual(sim.formattedTotalDuration, "0:05")
+
+        # Transition to transcribing at t = 1005.1
+        sim.overallState = "transcribing"
+        sim.updateDuration(1007.2)
+        self.assertEqual(sim.totalElapsedSeconds, 7)
+        self.assertEqual(sim.formattedTotalDuration, "0:07")
+
+        # Transition to typing at t = 1007.8
+        sim.overallState = "typing"
+        sim.updateDuration(1007.8)
+        self.assertEqual(sim.totalElapsedSeconds, 7)
+        self.assertEqual(sim.formattedTotalDuration, "0:07")
+        self.assertTrue(sim.typingDurationCaptured)
+
+        # During typing at t = 1010.5 (text insertion happening)
+        sim.updateDuration(1010.5)
+        self.assertEqual(sim.totalElapsedSeconds, 7, "Total duration must freeze during typing")
+        self.assertEqual(sim.formattedTotalDuration, "0:07")
+
+        # During 5s linger at t = 1012.8
+        sim.updateDuration(1012.8)
+        self.assertEqual(sim.totalElapsedSeconds, 7, "Total duration must remain frozen during linger")
+        self.assertEqual(sim.formattedTotalDuration, "0:07")
+
+    def test_toggle_recording_atomically_transitions_to_transcribing(self):
+        """Verify toggle_background_recording atomically writes transcribing on SIGUSR1 stop (D-03)."""
+        pid = 98765
+        voice.write_pid_state(pid, "recording")
+        read_pid, read_state = voice.read_pid_state()
+        self.assertEqual(read_pid, pid)
+        self.assertEqual(read_state, "recording")
+
+        args = voice.parse_args(["--no-beep", "--no-notify"])
+        with patch("voice.process_alive", return_value=True), \
+             patch("os.kill") as mock_kill, \
+             patch("voice.subprocess.Popen") as mock_popen:
+            res = voice.toggle_background_recording(args)
+            self.assertEqual(res, 0)
+            mock_kill.assert_called_once_with(pid, signal.SIGUSR1)
+            mock_popen.assert_not_called()
+
+        # PID file must have transitioned to transcribing
+        after_pid, after_state = voice.read_pid_state()
+        self.assertEqual(after_pid, pid)
+        self.assertEqual(after_state, "transcribing")
+
+    def test_toggle_recording_rejects_during_transcribing_and_typing(self):
+        """Verify toggle_background_recording rejects re-entry during transcribing or typing (D-04)."""
+        pid = 98765
+        args = voice.parse_args([])
+
+        for busy_state in ("transcribing", "typing"):
+            with self.subTest(state=busy_state):
+                voice.write_pid_state(pid, busy_state)
+                with patch("voice.process_alive", return_value=True), \
+                     patch("voice.play_cue") as mock_cue, \
+                     patch("voice.notify") as mock_notify, \
+                     patch("voice.subprocess.Popen") as mock_popen:
+                    res = voice.toggle_background_recording(args)
+                    self.assertEqual(res, 0)
+                    mock_popen.assert_not_called()
+                    mock_cue.assert_called_once_with(args, "error")
+                    mock_notify.assert_called_once()
+                    self.assertIn("Cannot start recording: transcription/typing in progress.", mock_notify.call_args[0][1])
+
+                # PID state unchanged
+                cur_pid, cur_state = voice.read_pid_state()
+                self.assertEqual(cur_pid, pid)
+                self.assertEqual(cur_state, busy_state)

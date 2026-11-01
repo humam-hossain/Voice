@@ -264,11 +264,13 @@ class TestDaemonLifecycleStates(TempXdgTestCase):
         with patch("voice.read_pid_state", return_value=(pid, "transcribing")), \
              patch("voice.process_alive", return_value=True), \
              patch("voice.play_cue") as mock_cue, \
+             patch("voice.notify") as mock_notify, \
              patch("os.kill") as mock_kill, \
              patch("subprocess.Popen") as mock_popen:
             ret = voice.toggle_background_recording(args)
             self.assertEqual(ret, 0)
             mock_cue.assert_called_once_with(args, "error")
+            mock_notify.assert_called_once()
             mock_kill.assert_not_called()
             mock_popen.assert_not_called()
 
