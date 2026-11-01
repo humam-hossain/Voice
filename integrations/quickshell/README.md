@@ -47,7 +47,7 @@ The integration consists of two decoupled QML components:
 - **Computed Timers:**
   - `formattedRecordedDuration`: Time audio was actively captured. Frozen when recording stops.
   - `formattedTranscribedDuration`: Decoded audio duration (`transcribed_audio_s`), progressing incrementally during concurrent chunk decode and tail decode.
-  - `formattedTotalDuration`: Total wall-clock elapsed time from dictation start through typing completion.
+  - `formattedTotalDuration`: Total elapsed time strictly measuring start of dictation to end of transcription (freezes when typing begins, excluding text insertion time).
 
 ### 2. `VoicePill.qml` (Bar Pill Component)
 - **Location in dotfiles:** `restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml`
@@ -58,7 +58,7 @@ The integration consists of two decoupled QML components:
   - **Recording (Concurrent Decode):** Smooth breathing color pulse alternating between `colPrimary` and Sky Blue (`#38bdf8`) with 600ms easing.
   - **Transcribing (Tail Decode):** Dedicated Sky Blue (`#38bdf8`) across icon and text, `graphic_eq` glyph, 3-bar progress timer (`recorded | transcribed | total`).
   - **Typing / Text Insertion:** Dedicated Neon Green (`#4ade80`) across icon and text, `edit` Material Symbol glyph (pen icon), retaining the 3-bar progress timer.
-  - **Wrap-up (1.5s linger):** Retains Neon Green styling and final 3-bar timer before smooth collapse to idle.
+  - **Wrap-up (5s linger):** Retains Neon Green styling and final 3-bar timer for a full 5 seconds before smooth collapse to idle.
   - **Speaking (TTS):** `colSecondary` color, `graphic_eq` glyph, single elapsed timer.
 
 ---
@@ -96,7 +96,7 @@ All snapshots adhere strictly to `STATUS_V1_KEYS` without unknown keys:
 ```
 
 ### Output Method Recommendation
-- **Recommended Default:** `--output-method paste` (or `--paste`). Fast clipboard insertion finishes in ~20ms, eliminating slow letter-by-letter typing delays while `typingLingerTimer` (1000ms) and `wrapUpTimer` (1500ms) preserve the visual Neon Green typing indicator and pen glyph on the bar.
+- **Recommended Default:** `--output-method paste` (or `--paste`). Fast clipboard insertion finishes in ~20ms, eliminating slow letter-by-letter typing delays while `typingLingerTimer` (5000ms) and `wrapUpTimer` (5000ms) preserve the visual Neon Green typing indicator, pen glyph, and 3-bar timers on the bar for a full 5 seconds before returning to idle.
 
 ### Report Click-Through Security
 Clicking the pill during `transcribing`, `typing`, or `wrapup` triggers `Voice.openReport()`.
