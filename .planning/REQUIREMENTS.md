@@ -68,11 +68,11 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Quickshell Integration (UI)
 
-- [ ] **UI-01**: `VoicePill` shows the ETA instead of `"Transcribing..."`; a single number; distinct from recording via palette role **and** glyph; verified in light, dark, and grayscale.
-- [ ] **UI-02**: 1 Hz countdown from `eta_epoch` (QML `real`); no 10 Hz synchronous reads; `watchChanges` plus a fallback poll; no process spawn.
-- [ ] **UI-03**: Validity gate (schema/pid/state/expiry); unknown or stale state renders busy, never idle or a frozen number.
-- [ ] **UI-04**: Click during transcribing/typing/wrap-up opens the report; inert during recording; the path is validated.
-- [ ] **UI-05**: Live QML is committed in `~/.dotfiles`; a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative.
+- [ ] **UI-01**: `VoicePill` displays live progress timers instead of static text (`"Transcribing..."`, `"Typing..."`); dual progress (`recorded | transcribed`) during recording, immediately switching to 3-bar progress (`recorded | transcribed | total`) on stop/transcription and during typing.
+- [ ] **UI-02**: State-synchronized styling: full color matching across text and glyphs (STT sky blue for decode, neon green for typing/writing with `edit` pen glyph, dual alternating pulse while recording+transcribing).
+- [ ] **UI-03**: Layout stability and validity gate: stable pill width without horizontal jitter as digits tick; unknown or stale status handled cleanly without hanging in ghost states.
+- [ ] **UI-04**: Click during transcribing/typing/wrap-up opens the latency report; inert during recording; the path is validated.
+- [ ] **UI-05**: Live QML is committed in `~/.dotfiles` (`restow/quickshell/...`); a vendored reference lives in `integrations/quickshell/`; docs mark the live copy as authoritative.
 
 ### Accuracy & Portability (ACC)
 

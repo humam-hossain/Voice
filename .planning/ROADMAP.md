@@ -29,8 +29,9 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 - [x] **Phase 6: Foundations, Ledger & Status Contract** - Freeze the schema and status contract, fix lifecycle races, and instrument honest stage timings.
 - [x] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate. — completed 2026-10-29
 - [x] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports. (completed 2026-10-30)
-- [ ] **Phase 9: Quickshell ETA Integration** - Replace "Transcribing..." with a glanceable countdown and a click that opens the report.
+- [ ] **Phase 9: Quickshell Status Pill Integration** - Replace static labels with dual/triple live progress timers, state-matched glyphs and colors (sky blue for STT, neon green for typing), and report click-through.
 - [ ] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix.
+- [ ] **Phase 11: Voice Desktop Pop-up UI** - Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry.
 
 ## Phase Details
 
@@ -119,18 +120,18 @@ Plans:
 
 **Plans**: TBD
 
-### Phase 9: Quickshell ETA Integration
+### Phase 9: Quickshell Status Pill Integration
 
-**Goal**: The Quickshell pill shows a truthful, glanceable ETA during transcription and opens the accuracy report on click.
+**Goal**: The Quickshell pill shows real-time dual/triple progress timers, switches glyph and color matching across recording, transcription, and typing, and opens the latency report on click.
 **Depends on**: Phase 8
 **Requirements**: UI-01, UI-02, UI-03, UI-04, UI-05
 **Success Criteria** (what must be TRUE):
 
-  1. During transcription the pill shows a single-number ETA in place of `"Transcribing..."`, visually distinct from recording by both palette role and glyph, and legible in light, dark, and grayscale.
-  2. The number counts down at 1 Hz from the worker-provided epoch without spawning a process, without synchronous 10 Hz reads, and without shifting the bar's layout on each tick.
-  3. Unknown, malformed, or stale status renders a busy state — never idle and never a frozen number — while recording still shows no ETA.
-  4. A click during transcribing/typing/wrap-up opens the local report; a click during recording is inert; a missing report or unavailable opener degrades to a notification or printed path.
-  5. The live QML change is committed in the dotfiles repo and a matching vendored reference exists under `integrations/quickshell/`, with docs naming the live copy as authoritative.
+  1. During recording the pill shows dual progress (`recorded_time | transcribed_time`) with alternating/breathing colors (`colPrimary` and STT sky blue); when recording stops, it immediately shows 3 bars (`recorded_time | transcribed_time | total_time`) and shifts fully to STT sky blue across both text and glyph.
+  2. During typing/insertion, the glyph switches to `edit` and the color shifts to neon green across both icon and text, while retaining the 3-bar progress until typing completes, returning to default idle with no text.
+  3. No static `"Transcribing..."`, `"Finalizing..."`, or `"Typing..."` text strings are ever displayed.
+  4. A click during transcribing/typing/wrap-up opens the local latency report (`report.html`); a click during recording is inert; a missing report or unavailable opener degrades gracefully.
+  5. The live QML change is committed in the dotfiles repo (`restow/quickshell/...`) and a matching vendored reference exists under `integrations/quickshell/`, with docs naming the live copy as authoritative.
 
 **Plans**: TBD
 **UI hint**: yes
@@ -150,6 +151,19 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 11: Voice Desktop Pop-up UI
+
+**Goal**: Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry.
+**Depends on**: Phase 9
+**Requirements**: POP-01, POP-02
+**Success Criteria** (what must be TRUE):
+
+  1. Desktop popup window opens on hotkey or pill click-action to inspect recent transcriptions, stage latency details, and runtime status.
+  2. Integrated cleanly into Quickshell panel families and themed consistently with Material You tokens.
+
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
 **Execution Order:**
@@ -165,5 +179,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
 | 7. ETA Engine & Calibration | v1.1 | 4/4 | Complete    | 2026-10-29 |
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
-| 9. Quickshell ETA Integration | v1.1 | 0/0 | Not started | - |
+| 9. Quickshell Status Pill Integration | v1.1 | 0/0 | In progress | - |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |
+| 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |
