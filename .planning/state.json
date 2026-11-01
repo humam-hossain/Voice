@@ -45,19 +45,24 @@
     },
     {
       "number": "9",
-      "name": "Quickshell ETA Integration",
-      "status": "pending"
+      "name": "Quickshell Status Pill Integration",
+      "status": "in_progress"
     },
     {
       "number": "10",
       "name": "Accuracy Loop, Portability & Hardening",
       "status": "pending"
+    },
+    {
+      "number": "11",
+      "name": "Voice Desktop Pop-up UI",
+      "status": "pending"
     }
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step (plan phase 9)",
-    "reason": "Phase 9 of 5 — needs a plan"
+    "label": "Advance to the next step",
+    "reason": "Phase 09 of 6 · 50% · executing"
   },
-  "updated_at": "2026-10-29T22:10:21.574Z"
+  "updated_at": "2026-11-01T08:02:38.986Z"
 }
