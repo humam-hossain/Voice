@@ -1,12 +1,12 @@
 ---
-status: complete
+status: diagnosed
 phase: 09-quickshell-status-pill-integration
 source:
   - 09-01-SUMMARY.md
   - 09-02-SUMMARY.md
   - 09-03-SUMMARY.md
 started: 2026-11-01T14:26:00Z
-updated: 2026-11-01T14:42:00Z
+updated: 2026-11-01T14:43:00Z
 ---
 
 ## Current Test
@@ -85,14 +85,15 @@ skipped: 0
   reason: "User reported: 1. Linger 5s after writing finishes so user can inspect all 3 final timer values. 2. Exclude typing time from total duration (total time freezes when transcribing ends and typing begins). 3. Strictly prevent starting a new recording while previous session is still transcribing or typing."
   severity: major
   test: 1
+  root_cause: "Voice.qml continues wall-clock ticking for totalElapsedSeconds during typing and uses 1000ms linger; VoicePill.qml uses 1500ms wrapUpTimer; voice.py toggle_background_recording does not atomically mark state transcribing when signaling stop."
   artifacts:
     - path: "integrations/quickshell/Voice.qml"
       issue: "Total elapsed continues ticking during typing; linger timer is 1.0s instead of 5.0s"
     - path: "integrations/quickshell/VoicePill.qml"
       issue: "wrapUpTimer is 1.5s instead of 5.0s"
     - path: "voice.py"
-      issue: "toggle_background_recording does not update state to transcribing atomically when signaling worker; ensure strict rejection during transcribe and typing"
+      issue: "toggle_background_recording sends SIGUSR1 on stop without atomically updating recorder.pid state to transcribing under PID lock"
   missing:
-    - "Set wrapUpTimer and typingLingerTimer intervals to 5000ms"
-    - "Freeze totalElapsedSeconds at transcription completion in Voice.qml"
-    - "Harden toggle_background_recording against re-trigger races during transcribing and typing"
+    - "Set wrapUpTimer and typingLingerTimer intervals to 5000ms across Voice.qml and VoicePill.qml"
+    - "Freeze totalElapsedSeconds at transcription completion in Voice.qml so typing duration is excluded from total"
+    - "Write transcribing state under with_pid_lock when signaling stop in toggle_background_recording to prevent re-trigger races"
