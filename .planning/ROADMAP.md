@@ -135,6 +135,8 @@ Plans:
 
 **Plans**: TBD
 
+- [x] 09-04-PLAN.md
+
 - [x] 09-01-PLAN.md
 - [x] 09-02-PLAN.md
 - [x] 09-03-PLAN.md
@@ -184,6 +186,6 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 6. Foundations, Ledger & Status Contract | v1.1 | 7/7 | Complete    | 2026-10-29 |
 | 7. ETA Engine & Calibration | v1.1 | 4/4 | Complete    | 2026-10-29 |
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
-| 9. Quickshell Status Pill Integration | v1.1 | 3/3 | Complete    | 2026-11-01 |
+| 9. Quickshell Status Pill Integration | v1.1 | 4/4 | In Progress|  |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |
 | 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |
