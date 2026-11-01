@@ -52,6 +52,7 @@ Singleton {
     property string formattedTranscribedDuration: "0:00"
     property int totalElapsedSeconds: 0
     property string formattedTotalDuration: "0:00"
+    property bool typingDurationCaptured: false
     readonly property string defaultReportPath: runtimeDir + "/report.html"
     property string statusReportPath: ""
 
@@ -117,7 +118,7 @@ Singleton {
     // Visual Linger Timer for Rapid Typing
     Timer {
         id: typingLingerTimer
-        interval: 1000
+        interval: 5000
         repeat: false
         onTriggered: {
             if (root.sttState === "typing") {
@@ -129,6 +130,7 @@ Singleton {
 
     function resetDuration() {
         startTime = 0;
+        typingDurationCaptured = false;
         elapsedMs = 0;
         elapsedSeconds = 0;
         formattedDuration = "0:00";
@@ -166,6 +168,7 @@ Singleton {
 
     function updateDuration() {
         if (overallState === "recording" || overallState === "speaking") {
+            typingDurationCaptured = false;
             if (startTime <= 0) {
                 const activePid = (overallState === "recording") ? sttPid : ttsPid;
                 startTime = Math.min(Date.now(), recoverStartTime(activePid));
@@ -178,12 +181,21 @@ Singleton {
             formattedRecordedDuration = formattedDuration;
             totalElapsedSeconds = sec;
             formattedTotalDuration = formattedDuration;
-        } else if (overallState === "transcribing" || overallState === "typing") {
+        } else if (overallState === "transcribing") {
             // Recorded duration remains frozen; wall-clock total continues ticking
             if (startTime > 0) {
                 const totalDiff = Math.max(0, Date.now() - startTime);
                 totalElapsedSeconds = Math.floor(totalDiff / 1000);
                 formattedTotalDuration = formatDuration(totalElapsedSeconds);
+            }
+        } else if (overallState === "typing") {
+            // Total duration strictly measures start-of-recording to end-of-transcription;
+            // freeze upon entering typing state and do not advance with Date.now()
+            if (startTime > 0 && !typingDurationCaptured) {
+                const totalDiff = Math.max(0, Date.now() - startTime);
+                totalElapsedSeconds = Math.floor(totalDiff / 1000);
+                formattedTotalDuration = formatDuration(totalElapsedSeconds);
+                typingDurationCaptured = true;
             }
         } else if (overallState === "idle" && !typingLingerTimer.running) {
             resetDuration();
@@ -333,6 +345,7 @@ Singleton {
             root.totalElapsedSeconds = 0;
             root.formattedTotalDuration = "0:00";
             root.statusReportPath = "";
+            root.typingDurationCaptured = false;
         }
 
         root.updateDuration();

@@ -844,7 +844,10 @@ def notify(
         cmd.extend(["-u", effective_urgency])
     if effective_expire is not None:
         cmd.extend(["-t", str(effective_expire)])
-    subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
+    try:
+        subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
 def report_stt_failure(
@@ -2051,8 +2054,9 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
                         break
 
             if pid and process_alive(pid):
-                if state == "transcribing":
+                if state in ("transcribing", "typing"):
                     play_cue(args, "error")
+                    notify(APP_NAME, "Cannot start recording: transcription/typing in progress.", args)
                     print("Voice STT is currently transcribing and inserting text. Please wait...", file=sys.stderr)
                     return 0
                 if state == "recording":
@@ -2060,6 +2064,7 @@ def toggle_background_recording(args: argparse.Namespace) -> int:
                         os.kill(pid, signal.SIGUSR1)
                     except ProcessLookupError:
                         pass
+                    write_pid_state(pid, "transcribing")
                     print("Stopping voice recording...")
                     return 0
                 play_cue(args, "error")

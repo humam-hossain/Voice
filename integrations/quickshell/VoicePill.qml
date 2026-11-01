@@ -88,10 +88,10 @@ BarGroup {
     )
 
     resources: [
-        // Completion Wrap-up Linger Timer (~1.5s per D-06)
+        // Completion Wrap-up Linger Timer (5s per D-01)
         Timer {
             id: wrapUpTimer
-            interval: 1500
+            interval: 5000
             repeat: false
         },
 
