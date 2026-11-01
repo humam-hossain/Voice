@@ -1,5 +1,5 @@
 ---
-status: testing
+status: complete
 phase: 09-quickshell-status-pill-integration
 source:
   - 09-01-SUMMARY.md
@@ -7,22 +7,12 @@ source:
   - 09-03-SUMMARY.md
   - 09-04-SUMMARY.md
 started: 2026-11-01T14:26:00Z
-updated: 2026-11-01T16:02:46Z
+updated: 2026-11-01T18:24:34Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Quickshell Status Pill Integration Confirmation
-expected: |
-  Confirm that the Quickshell status pill integration behavior matches expectations on your desktop:
-  (1) Timers are 100% controlled by voice.py: when recording is not active, no timers tick; when recording, recorded and total durations reflect live audio.
-  (2) When transcription ends and typing begins, total duration strictly freezes and typing time is excluded.
-  (3) The pill lingers for 5 seconds after typing finishes showing all 3 final timer values before resetting to idle.
-  (4) Hotkey re-entry during transcribing/typing is cleanly blocked with an error cue and notification.
-  (5) No runaway background workers or uncoordinated duplicate recordings can ever be spawned.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -34,7 +24,7 @@ expected: |
   (3) The pill lingers for 5 seconds after typing finishes showing all 3 final timer values before resetting to idle.
   (4) Hotkey re-entry during transcribing/typing is cleanly blocked with an error cue and notification.
   (5) No runaway background workers or uncoordinated duplicate recordings can ever be spawned.
-result: [pending]
+result: pass
 
 ### 2. Published transcribed_audio_s during tail decode and typing states in voice.py
 expected: Published transcribed_audio_s during tail decode and typing states in voice.py
@@ -87,9 +77,9 @@ coverage_id: 09-03-D2
 ## Summary
 
 total: 9
-passed: 8
+passed: 9
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 
 ## Gaps
