@@ -430,3 +430,191 @@ class TestStatusContract(TempXdgTestCase):
             out = json.loads(f.getvalue().strip())
             self.assertEqual(out.get('transcribed_audio_s'), 8.75)
             self.assertEqual(out.get('state'), 'recording')
+
+    def test_tail_decode_publishes_transcribed_audio_s(self):
+        """Verify chunk consumer publishes transcribed_audio_s during tail decode."""
+        published = []
+        orig = voicemode_telemetry.publish_status
+
+        def rec(s):
+            published.append(dict(s))
+            return orig(s)
+
+        args = voice.parse_args([])
+        args.no_beep = True
+        args.no_notify = True
+        args.paste = True
+
+        fake_recorder = MagicMock()
+        fake_recorder.started_at = 1000.0
+        fake_recorder.recording = True
+        fake_recorder.chunk_audio_s.return_value = 2.5
+        fake_recorder.stop_to_wav.return_value = (
+            [Path('/tmp/chunk1.wav'), Path('/tmp/chunk2.wav')],
+            5.0,
+            True,
+        )
+
+        model_state = MagicMock()
+        ev1 = voice.TranscriptionEvidence(
+            text='chunk one',
+            model_state=model_state,
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=2.5,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=2.5,
+        )
+
+        with patch('voicemode_telemetry.publish_status', side_effect=rec), \
+             patch('signal.signal'), \
+             patch('voice.Recorder', return_value=fake_recorder), \
+             patch('voice.play_cue'), \
+             patch('voice.play_cue_async'), \
+             patch('voice.load_model', return_value=model_state), \
+             patch('voice.transcribe_timed', return_value=ev1), \
+             patch('voice.insert_text', return_value=True), \
+             patch('voice.time.sleep'), \
+             patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
+            voice.run_background_recording(args)
+
+        tail_decode_snapshots = [
+            p for p in published
+            if p.get('state') == 'transcribing' and p.get('phase') == 'decode'
+        ]
+        self.assertTrue(len(tail_decode_snapshots) >= 1)
+        # Final tail decode snapshot must reflect all processed chunk audio
+        final_decode = tail_decode_snapshots[-1]
+        self.assertIsNotNone(final_decode.get('transcribed_audio_s'))
+        self.assertEqual(final_decode['transcribed_audio_s'], 5.0)
+        self.assertEqual(final_decode['segments'], 2)
+        self.assertEqual(final_decode['segments_done'], 2)
+
+    def test_typing_state_publishes_transcribed_audio_s_and_audio_s(self):
+        """Verify typing state transition publishes both transcribed_audio_s and audio_s matching duration."""
+        for paste_mode in [True, False]:
+            with self.subTest(paste=paste_mode):
+                published = []
+                orig = voicemode_telemetry.publish_status
+
+                def rec(s):
+                    published.append(dict(s))
+                    return orig(s)
+
+                args = voice.parse_args([])
+                args.no_beep = True
+                args.no_notify = True
+                args.paste = paste_mode
+
+                fake_recorder = MagicMock()
+                fake_recorder.started_at = 1000.0
+                fake_recorder.recording = True
+                fake_recorder.chunk_audio_s.return_value = 3.25
+                fake_recorder.stop_to_wav.return_value = ([Path('/tmp/chunk1.wav')], 3.25, True)
+
+                model_state = MagicMock()
+                ev = voice.TranscriptionEvidence(
+                    text='finished dictation',
+                    model_state=model_state,
+                    decode_ms=10.0,
+                    fallback=False,
+                    failure_type=None,
+                    backend="cpu, int8",
+                    avg_logprob=-0.2,
+                    compression_ratio=1.0,
+                    no_speech_prob=0.01,
+                    temperature=0.0,
+                    vad_audio_s=3.25,
+                    decoder_segments=1,
+                    fallback_load_ms=None,
+                    audio_s=3.25,
+                )
+
+                with patch('voicemode_telemetry.publish_status', side_effect=rec), \
+                     patch('signal.signal'), \
+                     patch('voice.Recorder', return_value=fake_recorder), \
+                     patch('voice.play_cue'), \
+                     patch('voice.play_cue_async'), \
+                     patch('voice.load_model', return_value=model_state), \
+                     patch('voice.transcribe_timed', return_value=ev), \
+                     patch('voice.insert_text', return_value=True), \
+                     patch('voice.time.sleep'), \
+                     patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
+                    voice.run_background_recording(args)
+
+                typing_snapshots = [
+                    p for p in published
+                    if p.get('state') == 'typing' and p.get('phase') == 'insert'
+                ]
+                self.assertEqual(len(typing_snapshots), 1)
+                typing_status = typing_snapshots[0]
+                self.assertEqual(typing_status['audio_s'], 3.25)
+                self.assertEqual(typing_status['transcribed_audio_s'], 3.25)
+
+    def test_status_v1_keys_conformance(self):
+        """Validate all published status snapshots match STATUS_V1_KEYS schema exactly."""
+        published = []
+        orig = voicemode_telemetry.publish_status
+
+        def rec(s):
+            published.append(dict(s))
+            return orig(s)
+
+        args = voice.parse_args([])
+        args.no_beep = True
+        args.no_notify = True
+        args.paste = True
+
+        fake_recorder = MagicMock()
+        fake_recorder.started_at = 1000.0
+        fake_recorder.recording = True
+        fake_recorder.chunk_audio_s.return_value = 2.0
+        fake_recorder.stop_to_wav.return_value = ([Path('/tmp/chunk1.wav')], 2.0, True)
+
+        model_state = MagicMock()
+        ev = voice.TranscriptionEvidence(
+            text='test audio',
+            model_state=model_state,
+            decode_ms=10.0,
+            fallback=False,
+            failure_type=None,
+            backend="cpu, int8",
+            avg_logprob=-0.2,
+            compression_ratio=1.0,
+            no_speech_prob=0.01,
+            temperature=0.0,
+            vad_audio_s=2.0,
+            decoder_segments=1,
+            fallback_load_ms=None,
+            audio_s=2.0,
+        )
+
+        with patch('voicemode_telemetry.publish_status', side_effect=rec), \
+             patch('signal.signal'), \
+             patch('voice.Recorder', return_value=fake_recorder), \
+             patch('voice.play_cue'), \
+             patch('voice.play_cue_async'), \
+             patch('voice.load_model', return_value=model_state), \
+             patch('voice.transcribe_timed', return_value=ev), \
+             patch('voice.insert_text', return_value=True), \
+             patch('voice.time.sleep'), \
+             patch('time.monotonic', advancing_monotonic(1000.0, 0.01)):
+            voice.run_background_recording(args)
+
+        self.assertTrue(len(published) > 0)
+        expected_keys = tuple(voicemode_telemetry.STATUS_V1_KEYS)
+        for idx, snap in enumerate(published):
+            self.assertEqual(
+                tuple(snap.keys()),
+                expected_keys,
+                f"Snapshot {idx} ({snap.get('state')}:{snap.get('phase')}) keys do not match STATUS_V1_KEYS",
+            )
+            # Must also pass validate_status without exception
+            voicemode_telemetry.validate_status(snap)
