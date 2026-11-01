@@ -44,6 +44,9 @@ BarGroup {
 
     // Effective Lifecycle State (Sequential Linear Flow)
     readonly property string effectiveState: {
+        if (Voice.overallState === "recording" || Voice.overallState === "starting" || Voice.overallState === "speaking") {
+            return Voice.overallState;
+        }
         if (inWrapUp) return "wrapup";
         return Voice.overallState;
     }
@@ -100,7 +103,7 @@ BarGroup {
             target: Voice
 
             function onOverallStateChanged() {
-                if (Voice.overallState === "recording" || Voice.overallState === "speaking") {
+                if (Voice.overallState === "recording" || Voice.overallState === "starting" || Voice.overallState === "speaking") {
                     wrapUpTimer.stop();
                 } else if (Voice.overallState === "idle") {
                     if (root.previousState === "typing" || root.previousState === "speaking") {

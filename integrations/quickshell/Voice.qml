@@ -178,6 +178,14 @@ Singleton {
             let rawState = parts[1] || "recording";
 
             if (!isNaN(pid) && pid > 0) {
+                // If a new session has started, immediately cut short any active linger timer
+                if (rawState === "recording" || rawState === "starting") {
+                    if (typingLingerTimer.running) {
+                        typingLingerTimer.stop();
+                        root.resetDuration();
+                    }
+                }
+
                 // Check process liveness safely via procfs
                 if (root.sttPid === pid) {
                     sttStatFile.reload();
@@ -199,7 +207,13 @@ Singleton {
                     if (st && !isExpired && st.pid === pid) {
                         rawState = st.state;
                     }
-                    if (rawState === "typing") {
+                    if (rawState === "recording" || rawState === "starting") {
+                        if (typingLingerTimer.running) {
+                            typingLingerTimer.stop();
+                            root.resetDuration();
+                        }
+                        root.sttState = rawState;
+                    } else if (rawState === "typing") {
                         root.sttState = "typing";
                         if (!typingLingerTimer.running) {
                             typingLingerTimer.restart();
@@ -216,7 +230,13 @@ Singleton {
             }
         } else {
             if (st && !isExpired && typeof st.state === "string" && st.state !== "idle") {
-                if (st.state === "typing") {
+                if (st.state === "recording" || st.state === "starting") {
+                    if (typingLingerTimer.running) {
+                        typingLingerTimer.stop();
+                        root.resetDuration();
+                    }
+                    root.sttState = st.state;
+                } else if (st.state === "typing") {
                     root.sttState = "typing";
                     if (!typingLingerTimer.running) {
                         typingLingerTimer.restart();
@@ -238,23 +258,34 @@ Singleton {
 
         // 2. Process status.json payload properties (100% telemetry-driven by voice.py)
         if (st && !isExpired && (root.sttState !== "idle" || typingLingerTimer.running)) {
-            if (st.audio_s !== undefined && st.audio_s !== null && st.audio_s >= 0) {
-                root.recordedAudioSeconds = st.audio_s;
-                root.formattedRecordedDuration = formatDuration(st.audio_s);
-            }
-            if (st.transcribed_audio_s !== undefined && st.transcribed_audio_s !== null && st.transcribed_audio_s >= 0) {
-                root.transcribedAudioSeconds = st.transcribed_audio_s;
-                root.formattedTranscribedDuration = formatDuration(st.transcribed_audio_s);
-            }
-            if (st.total_duration_s !== undefined && st.total_duration_s !== null && st.total_duration_s >= 0) {
-                root.totalElapsedSeconds = Math.floor(st.total_duration_s);
-                root.formattedTotalDuration = formatDuration(st.total_duration_s);
+            // Guard: Ignore stale status from a previous run while a new PID is starting/recording
+            if (root.sttPid > 0 && st.pid && st.pid !== root.sttPid && (root.sttState === "recording" || root.sttState === "starting")) {
+                root.recordedAudioSeconds = 0.0;
+                root.formattedRecordedDuration = "0:00";
+                root.transcribedAudioSeconds = 0.0;
+                root.formattedTranscribedDuration = "0:00";
+                root.totalElapsedSeconds = 0;
+                root.formattedTotalDuration = "0:00";
+                root.formattedDuration = "0:00";
             } else {
-                root.formattedTotalDuration = root.formattedRecordedDuration;
-            }
-            root.formattedDuration = root.formattedRecordedDuration;
-            if (st.report_path !== undefined && st.report_path !== null && typeof st.report_path === "string") {
-                root.statusReportPath = st.report_path;
+                if (st.audio_s !== undefined && st.audio_s !== null && st.audio_s >= 0) {
+                    root.recordedAudioSeconds = st.audio_s;
+                    root.formattedRecordedDuration = formatDuration(st.audio_s);
+                }
+                if (st.transcribed_audio_s !== undefined && st.transcribed_audio_s !== null && st.transcribed_audio_s >= 0) {
+                    root.transcribedAudioSeconds = st.transcribed_audio_s;
+                    root.formattedTranscribedDuration = formatDuration(st.transcribed_audio_s);
+                }
+                if (st.total_duration_s !== undefined && st.total_duration_s !== null && st.total_duration_s >= 0) {
+                    root.totalElapsedSeconds = Math.floor(st.total_duration_s);
+                    root.formattedTotalDuration = formatDuration(st.total_duration_s);
+                } else {
+                    root.formattedTotalDuration = root.formattedRecordedDuration;
+                }
+                root.formattedDuration = root.formattedRecordedDuration;
+                if (st.report_path !== undefined && st.report_path !== null && typeof st.report_path === "string") {
+                    root.statusReportPath = st.report_path;
+                }
             }
         }
 
