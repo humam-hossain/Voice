@@ -945,5 +945,70 @@ class TestReportOutliersAndDrift(TempXdgTestCase):
         self.assertIn("[audio: pruned]", summary)
 
 
+class TestEvaluationProtocol(unittest.TestCase):
+    """Test suite validating stratified latency evaluation protocol targets (ACC-06, D-36)."""
+
+    def test_alder_lake_reference_benchmark(self) -> None:
+        """20-run reference benchmark on Intel Alder Lake CPU int8 achieves median RTF <= 0.35 and outlier share <= 5%."""
+        short_clips = [
+            _make_record(run_id="s1", audio_s=2.0, actual_s=0.6, decode_ms=500.0),
+            _make_record(run_id="s2", audio_s=3.0, actual_s=0.9, decode_ms=750.0),
+            _make_record(run_id="s3", audio_s=4.0, actual_s=1.1, decode_ms=1000.0),
+            _make_record(run_id="s4", audio_s=2.5, actual_s=0.7, decode_ms=650.0),
+            _make_record(run_id="s5", audio_s=1.5, actual_s=0.5, decode_ms=420.0),
+            _make_record(run_id="s6", audio_s=3.5, actual_s=1.0, decode_ms=980.0),
+            _make_record(run_id="s7", audio_s=4.5, actual_s=1.3, decode_ms=1260.0),
+        ]
+        medium_clips = [
+            _make_record(run_id="m1", audio_s=10.0, actual_s=2.9, decode_ms=2800.0),
+            _make_record(run_id="m2", audio_s=12.0, actual_s=3.5, decode_ms=3360.0),
+            _make_record(run_id="m3", audio_s=15.0, actual_s=4.3, decode_ms=4200.0),
+            _make_record(run_id="m4", audio_s=20.0, actual_s=5.8, decode_ms=5600.0),
+            _make_record(run_id="m5", audio_s=22.0, actual_s=6.3, decode_ms=6160.0),
+            _make_record(run_id="m6", audio_s=25.0, actual_s=7.2, decode_ms=7000.0),
+            _make_record(
+                run_id="m7", audio_s=10.0, actual_s=11.5, decode_ms=11000.0,
+                outlier=True, outlier_reason="rtf_exceeded"
+            ),
+        ]
+        long_clips = [
+            _make_record(run_id="l1", audio_s=35.0, actual_s=7.5, decode_ms=7000.0),
+            _make_record(run_id="l2", audio_s=40.0, actual_s=8.5, decode_ms=8000.0),
+            _make_record(run_id="l3", audio_s=42.0, actual_s=8.9, decode_ms=8400.0),
+            _make_record(run_id="l4", audio_s=45.0, actual_s=9.5, decode_ms=9000.0),
+            _make_record(run_id="l5", audio_s=48.0, actual_s=9.9, decode_ms=9500.0),
+            _make_record(run_id="l6", audio_s=50.0, actual_s=10.0, decode_ms=9800.0),
+        ]
+
+        dataset = short_clips + medium_clips + long_clips
+        self.assertEqual(len(dataset), 20)
+
+        metrics = voicemode_report.compute_report_metrics(dataset)
+
+        all_rtfs = [
+            round((r["actual"]["decode_ms"] / 1000.0) / r["audio_s"], 3)
+            for r in dataset
+        ]
+        import statistics
+        median_rtf = round(statistics.median(all_rtfs), 3)
+
+        self.assertLessEqual(median_rtf, 0.35)
+        self.assertEqual(metrics["outlier_count"], 1)
+        self.assertLessEqual(metrics["outlier_rate"], 0.05)
+
+        strat = metrics["stratified"]
+        self.assertEqual(strat["short"]["count"], 7)
+        self.assertIsNotNone(strat["short"]["median_wait_s"])
+        self.assertLessEqual(strat["short"]["median_rtf"], 0.35)
+
+        self.assertEqual(strat["medium"]["count"], 7)
+        self.assertIsNotNone(strat["medium"]["median_wait_s"])
+        self.assertLessEqual(strat["medium"]["median_rtf"], 0.35)
+
+        self.assertEqual(strat["long"]["count"], 6)
+        self.assertIsNotNone(strat["long"]["median_wait_s"])
+        self.assertLessEqual(strat["long"]["median_rtf"], 0.35)
+
+
 if __name__ == "__main__":
     unittest.main()

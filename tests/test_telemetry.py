@@ -214,3 +214,57 @@ class TestKillSwitchCoversEverything(TempXdgTestCase):
         tmp = Path(self.xdg_root)
         self.assertFalse((tmp / 'state' / 'voicemode' / 'metrics.jsonl').exists())
         os.environ.pop('VOICE_METRICS', None)
+
+
+class TestTTSReadiness(unittest.TestCase):
+    """Test suite covering TTS readiness schema reservation and isolation (ACC-05, D-36)."""
+
+    def test_tts_reserved_structure(self) -> None:
+        res = t.tts_reserved()
+        expected_keys = {"predicted_ms", "actual_ms", "chars", "voice", "backend", "synth_ms", "play_ms"}
+        self.assertEqual(set(res.keys()), expected_keys)
+        for val in res.values():
+            self.assertIsNone(val)
+
+    def test_build_record_populates_tts_reserved_for_stt(self) -> None:
+        rec = t.build_record(
+            run_id="abc",
+            install_id="def",
+            ts_start=1.0,
+            ts_end=2.0,
+            outcome="success",
+            source="stt",
+        )
+        self.assertEqual(rec["source"], "stt")
+        self.assertIn("tts", rec)
+        self.assertEqual(rec["tts"], t.tts_reserved())
+        # Ensure STT contains no active TTS timings or priors
+        self.assertIsNone(rec["tts"]["synth_ms"])
+        self.assertIsNone(rec["tts"]["play_ms"])
+        self.assertIsNone(rec["tts"]["chars"])
+        self.assertIsNone(rec["tts"]["voice"])
+
+    def test_validate_record_source_validation(self) -> None:
+        rec = t.build_record(
+            run_id="abc",
+            install_id="def",
+            ts_start=1.0,
+            ts_end=2.0,
+            outcome="success",
+            source="stt",
+        )
+        # STT source valid
+        self.assertEqual(t.validate_record(rec)["source"], "stt")
+
+        # TTS source valid
+        rec_tts = dict(rec)
+        rec_tts["source"] = "tts"
+        self.assertEqual(t.validate_record(rec_tts)["source"], "tts")
+
+        # Invalid source rejected
+        rec_bad = dict(rec)
+        rec_bad["source"] = "invalid_source"
+        with self.assertRaises(ValueError) as ctx:
+            t.validate_record(rec_bad)
+        self.assertIn("invalid source", str(ctx.exception))
+
