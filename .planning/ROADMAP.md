@@ -30,7 +30,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 - [x] **Phase 7: ETA Engine & Calibration** - Turn measured runs into an immediate, robust, mid-run-corrected single-number estimate. — completed 2026-10-29
 - [x] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports. (completed 2026-10-30)
 - [x] **Phase 9: Quickshell Status Pill Integration** - Replace static labels with dual/triple live progress timers, state-matched glyphs and colors (sky blue for STT, neon green for typing), and report click-through. (completed 2026-11-01)
-- [ ] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix.
+- [x] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix. (completed 2026-11-02)
 - [ ] **Phase 11: Voice Desktop Pop-up UI** - Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry.
 
 ## Phase Details
@@ -156,11 +156,11 @@ Plans:
   4. The dictation → ETA → report loop survives UID ≠ 1000, unset `XDG_RUNTIME_DIR`, 44.1 kHz multi-chunk audio, cold boot, 4 GB RAM, a read-only state directory, and a full disk without breaking transcription.
   5. `docs/telemetry.md` and the README document schema, privacy, opt-in capture, environment variables, and deletion; TTS-reserved fields are present with no TTS priors mixed in; the evaluation protocol (median absolute error, p90, signed bias, overrun share, stratified) is recorded before collection.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 **Wave 1**
 
 - [x] 10-01-PLAN.md
-- [ ] 10-03-PLAN.md
+- [x] 10-03-PLAN.md
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
