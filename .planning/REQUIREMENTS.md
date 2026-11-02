@@ -76,13 +76,13 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 
 ### Accuracy & Portability (ACC)
 
-- [ ] **ACC-01**: Always-on outlier detection; opt-in bounded corpus capture (default off, caps, retention, free-space check, no network).
-- [ ] **ACC-02**: Report convergence/drift views and a per-config calibration table; `--doctor` shows n, median absolute %, p90, and last calibration.
-- [ ] **ACC-03**: CPU int8 verified; CUDA is detected and recorded only; AMD/Intel are detected and stay on CPU; the resolved backend is keyed; probes are guarded.
-- [ ] **ACC-04**: Durability tests: UID≠1000, unset `XDG_RUNTIME_DIR`, 44.1 kHz multi-chunk, cold boot, 4 GB RAM, read-only state dir, disk full.
-- [ ] **ACC-05**: TTS readiness only: reserved fields present, QML branches on `source`, no TTS priors mixed in.
-- [ ] **ACC-06**: Evaluation protocol fixed before collecting: median absolute error, p90, signed bias, overrun share, stratified; target ≤20% median absolute error after 20 runs on this machine.
-- [ ] **ACC-07**: `docs/telemetry.md` plus README updates; `--doctor` checks ledger/status health and resolved paths.
+- [x] **ACC-01**: Always-on outlier detection; opt-in bounded corpus capture (default off, caps, retention, free-space check, no network).
+- [x] **ACC-02**: Report convergence/drift views and a per-config calibration table; `--doctor` shows n, median absolute %, p90, and last calibration.
+- [x] **ACC-03**: CPU int8 verified; CUDA is detected and recorded only; AMD/Intel are detected and stay on CPU; the resolved backend is keyed; probes are guarded.
+- [x] **ACC-04**: Durability tests: UID≠1000, unset `XDG_RUNTIME_DIR`, 44.1 kHz multi-chunk, cold boot, 4 GB RAM, read-only state dir, disk full.
+- [x] **ACC-05**: TTS readiness only: reserved fields present, QML branches on `source`, no TTS priors mixed in.
+- [x] **ACC-06**: Evaluation protocol fixed before collecting: median absolute error, p90, signed bias, overrun share, stratified; target ≤20% median absolute error after 20 runs on this machine.
+- [x] **ACC-07**: `docs/telemetry.md` plus README updates; `--doctor` checks ledger/status health and resolved paths.
 
 ## v2 Requirements
 
@@ -178,13 +178,13 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | UI-03 | 9 | Complete |
 | UI-04 | 9 | Complete |
 | UI-05 | 9 | Complete |
-| ACC-01 | 10 | Pending |
-| ACC-02 | 10 | Pending |
-| ACC-03 | 10 | Pending |
-| ACC-04 | 10 | Pending |
-| ACC-05 | 10 | Pending |
-| ACC-06 | 10 | Pending |
-| ACC-07 | 10 | Pending |
+| ACC-01 | 10 | Complete |
+| ACC-02 | 10 | Complete |
+| ACC-03 | 10 | Complete |
+| ACC-04 | 10 | Complete |
+| ACC-05 | 10 | Complete |
+| ACC-06 | 10 | Complete |
+| ACC-07 | 10 | Complete |
 
 **Coverage:**
 

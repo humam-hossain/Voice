@@ -195,5 +195,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. ETA Engine & Calibration | v1.1 | 4/4 | Complete    | 2026-10-29 |
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
 | 9. Quickshell Status Pill Integration | v1.1 | 4/4 | Complete    | 2026-11-02 |
-| 10. Accuracy Loop, Portability & Hardening | v1.1 | 1/3 | In Progress|  |
+| 10. Accuracy Loop, Portability & Hardening | v1.1 | 3/3 | Complete    | 2026-11-02 |
 | 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |

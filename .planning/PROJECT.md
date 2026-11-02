@@ -38,18 +38,17 @@ Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch L
 - ✓ Hyprland native Lua keybindings (`SUPER + SHIFT + M`, `SUPER + T`) with Stow symlink preservation — Phase 4
 - ✓ Daemon lifecycle hardening, double-tap race mitigation, signal differentiation, and focus-safe notifications — Phase 4
 - ✓ End-to-end verification of STT dictation and TTS playback under Hyprland — Phase 5
+- ✓ Non-transcription commands stay import-light and lifecycle paths stop producing stale state — Phase 6
+- ✓ Privacy-safe per-run telemetry ledger with honest stage timings — Phase 6
+- ✓ Atomic advisory `status.json` contract alongside the authoritative PID file — Phase 6
+- ✓ Calibrated single-number ETA with mid-run correction and graceful overrun — Phase 7
+- ✓ Offline terminal/CSV/HTML accuracy report — Phase 8
+- ✓ Quickshell pill shows the ETA and opens the report on click — Phase 9
+- ✓ Outlier loop, cross-hardware portability, and hardening — Phase 10
 
 ### Active — v1.1 Latency Prediction & Telemetry
 
-Full list with acceptance criteria: `.planning/REQUIREMENTS.md` (48 requirements).
-
-- [ ] Non-transcription commands stay import-light and lifecycle paths stop producing stale state (FND, 5)
-- [ ] Privacy-safe per-run telemetry ledger with honest stage timings (LED/DEC, 11)
-- [ ] Atomic advisory `status.json` contract alongside the authoritative PID file (STS, 5)
-- [ ] Calibrated single-number ETA with mid-run correction and graceful overrun (ETA, 9)
-- [ ] Offline terminal/CSV/HTML accuracy report (RPT, 6)
-- [ ] Quickshell pill shows the ETA and opens the report on click (UI, 5)
-- [ ] Outlier loop, cross-hardware portability, and hardening (ACC, 7)
+Full list with acceptance criteria: `.planning/REQUIREMENTS.md` (48 requirements). All 48 requirements validated through Phase 10.
 
 ### Deferred (carried from v1.0)
 
@@ -93,12 +92,15 @@ Full list with acceptance criteria: `.planning/REQUIREMENTS.md` (48 requirements
 | Focus-safe notification policy | Suppress routine STT toasts to prevent Wayland active window focus stealing before `wtype` typing | ✓ Validated in Phase 4 |
 | Default to CPU int8 for STT | Intel UHD Graphics 770; CPU int8 provides fast, stable inference without complex driver setup | ✓ Validated in Phase 1 |
 | System diagnostics engine and 3-tier verification | Built-in `voice --doctor` and `voice --verify` provide self-diagnostics and live compositor validation | ✓ Validated in Phase 5 |
-| ETA is one integer, no range; `~` while uncalibrated, `Finishing…` on overrun | A glanceable number in a two-word-wide pill; confidence and ranges belong in the report | → v1.1 Phase 7 |
-| PID file stays state authority; `status.json` is advisory | Keeps the existing bar consumer safe; deleting status never changes state; stale snapshots expire | → v1.1 Phase 6 |
-| Report ships before the clickable pill; click opens pre-rendered report via `xdg-open` | A click must never open a missing or cold-generated page | → v1.1 Phases 8-9 |
-| Zero new Python dependencies; stdlib + inline SVG | Ledger, robust stats, atomic I/O, and charts are all achievable in stdlib; avoids matplotlib's 40 MB and slow import | → v1.1 |
-| No transcript text; character counts only | Privacy baseline enforced by an allowlist serializer and a no-text test | → v1.1 Phase 6 |
-| Live Quickshell QML commits in `~/.dotfiles`; vendored copies in `integrations/quickshell/` | Live files are symlinks into the dotfiles repo, which is authoritative for this machine | → v1.1 Phase 9 |
+| ETA is one integer, no range; `~` while uncalibrated, `Finishing…` on overrun | A glanceable number in a two-word-wide pill; confidence and ranges belong in the report | ✓ Validated in Phase 7 |
+| PID file stays state authority; `status.json` is advisory | Keeps the existing bar consumer safe; deleting status never changes state; stale snapshots expire | ✓ Validated in Phase 6 |
+| Report ships before the clickable pill; click opens pre-rendered report via `xdg-open` | A click must never open a missing or cold-generated page | ✓ Validated in Phases 8-9 |
+| Zero new Python dependencies; stdlib + inline SVG | Ledger, robust stats, atomic I/O, and charts are all achievable in stdlib; avoids matplotlib's 40 MB and slow import | ✓ Validated in v1.1 |
+| No transcript text; character counts only | Privacy baseline enforced by an allowlist serializer and a no-text test | ✓ Validated in Phase 6 |
+| Live Quickshell QML commits in `~/.dotfiles`; vendored copies in `integrations/quickshell/` | Live files are symlinks into the dotfiles repo, which is authoritative for this machine | ✓ Validated in Phase 9 |
+| In-memory numpy array decoding fallback on disk write errors (ENOSPC) | Prevents dictation failure on full disk or read-only filesystems | ✓ Validated in Phase 10 |
+| Focus-safe telemetry outlier classification | Flags RTF > 1.0 or tail decode > 10s without desktop notifications or audio cues to protect window focus | ✓ Validated in Phase 10 |
+| Guarded hardware probing and doctor diagnostics | Inspects AVX2/AVX-512 extensions and GPUs with 1.0s timeout while strictly enforcing CPU int8 default | ✓ Validated in Phase 10 |
 
 ## Evolution
 
@@ -118,4 +120,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-26 after v1.1 milestone start*
+*Last updated: 2026-11-02 after Phase 10 completion*

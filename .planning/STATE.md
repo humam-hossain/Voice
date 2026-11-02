@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v1.1
 milestone_name: Latency Prediction & Telemetry
-current_phase: 10
-current_phase_name: Accuracy Loop, Portability & Hardening
-status: executing
-stopped_at: Phase 10 context gathered
-last_updated: "2026-11-02T04:25:20.108Z"
+current_phase: 11
+current_phase_name: Voice Desktop Pop-up UI
+status: planning
+stopped_at: Phase 10 complete, ready to plan Phase 11
+last_updated: "2026-11-02T06:22:50.182Z"
 last_activity: 2026-11-02
-last_activity_desc: Phase 10 execution started
-state_head: d074727cdea1fba0d1aff96accb4b0cafbf54fa2
+last_activity_desc: Phase 10 complete, transitioned to Phase 11
+state_head: 7aecf56280855003187057a7b0a0c34f9adb6a3e
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 21
   percent: 83
 ---
 
@@ -22,17 +22,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-19)
+See: .planning/PROJECT.md (updated 2026-11-02)
 
 **Core value:** Seamless, low-latency push-to-talk speech dictation and text-to-speech on Arch Linux + Hyprland using local models and native Wayland utilities.
-**Current focus:** Phase 10 — Accuracy Loop, Portability & Hardening (Completed)
+**Current focus:** Phase 11 — Voice Desktop Pop-up UI
 
 ## Current Position
 
-Phase: 10 (Accuracy Loop, Portability & Hardening) — COMPLETED
-Plan: 3 of 3
-Status: Phase 10 completed; ready for Phase 11
-Last activity: 2026-11-02 — Plan 10-03 completed; all Phase 10 plans complete
+Phase: 11 — Voice Desktop Pop-up UI
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-02 — Phase 10 complete, transitioned to Phase 11
 
 Progress: [████████░░] 83%
 
@@ -53,7 +53,7 @@ Progress: [████████░░] 83%
 | 07 | 4 | - | - |
 | 08 | 3 | - | - |
 | 09 | 4 | - | - |
-| 10 | TBD | - | - |
+| 10 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -68,6 +68,9 @@ Progress: [████████░░] 83%
 
 Full log in PROJECT.md Key Decisions table. Durable decisions for v1.1:
 
+- [v1.1 Phase 10] In-memory float32 numpy array fallback in Recorder and transcribe_timed prevents dictation failure on full disk (ENOSPC).
+- [v1.1 Phase 10] Outliers operate strictly under focus-safe policy: zero desktop toasts, zero audio beeps, zero window focus interactions.
+- [v1.1 Phase 10] Guarded hardware probing uses 1.0s timeout and zero model instantiation while strictly enforcing CPU int8 default.
 - [v1.1] ETA is one integer, no range; uncalibrated estimates use a `~` prefix; overrun clamps at `1s` then `Finishing…`.
 - [v1.1] `status.json` is advisory; the PID file remains the state authority; no new PID state strings.
 - [v1.1] Report ships before the clickable pill; click opens the pre-rendered local HTML report via `xdg-open`.
@@ -82,9 +85,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 6] Largest phase: plan ~6 plans (imports → module primitives → atomic/single-writer/identity → terminal states → timing seam → prior-ETA wiring + test migration).
-- [Phase 9] External Quickshell/QML integration requires a UI-SPEC and coordination with the dotfiles repo; the vendored copy can drift silently.
-- [Phase 10] CUDA/AMD behavior is unverified on this machine; plan detection defensively and validate by replay.
+- None for Phase 11.
 
 ### Quick Tasks Completed
 
@@ -102,7 +103,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-11-02T00:37:24.373Z
-Stopped at: Phase 10 context gathered
+Stopped at: Phase 10 complete, ready to plan Phase 11
 Resume file: .planning/phases/10-accuracy-loop-portability-hardening/10-CONTEXT.md
 
 ## Operator Next Steps
