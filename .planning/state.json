@@ -61,8 +61,8 @@
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step (plan phase 10)",
-    "reason": "Phase 10 of 6 — needs a plan"
+    "label": "Advance to the next step",
+    "reason": "Phase 10 of 6 · 67% · executing"
   },
-  "updated_at": "2026-11-01T18:29:57.644Z"
+  "updated_at": "2026-11-02T01:26:32.463Z"
 }

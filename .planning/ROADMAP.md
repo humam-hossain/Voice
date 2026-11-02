@@ -156,7 +156,15 @@ Plans:
   4. The dictation → ETA → report loop survives UID ≠ 1000, unset `XDG_RUNTIME_DIR`, 44.1 kHz multi-chunk audio, cold boot, 4 GB RAM, a read-only state directory, and a full disk without breaking transcription.
   5. `docs/telemetry.md` and the README document schema, privacy, opt-in capture, environment variables, and deletion; TTS-reserved fields are present with no TTS priors mixed in; the evaluation protocol (median absolute error, p90, signed bias, overrun share, stratified) is recorded before collection.
 
-**Plans**: TBD
+**Plans**: 3 plans
+**Wave 1**
+
+- [ ] 10-01-PLAN.md
+- [ ] 10-03-PLAN.md
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 10-02-PLAN.md
 
 ### Phase 11: Voice Desktop Pop-up UI
 
@@ -187,5 +195,5 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 7. ETA Engine & Calibration | v1.1 | 4/4 | Complete    | 2026-10-29 |
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
 | 9. Quickshell Status Pill Integration | v1.1 | 4/4 | Complete    | 2026-11-02 |
-| 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/0 | Not started | - |
+| 10. Accuracy Loop, Portability & Hardening | v1.1 | 0/3 | Ready to execute | - |
 | 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |
