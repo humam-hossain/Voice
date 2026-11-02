@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import re
+import shutil
 import statistics
 import tempfile
 import time
@@ -43,6 +44,146 @@ def get_metrics_dir() -> Path:
 
 def get_ledger_path() -> Path:
     return get_metrics_dir() / LEDGER_FILENAME
+
+
+MAX_CORPUS_FILES = 50
+MAX_CORPUS_BYTES = 100 * 1024 * 1024  # 100 MB
+MIN_FREE_SPACE_BYTES = 1024 * 1024 * 1024  # 1 GB
+CORPUS_GRACE_PERIOD_S = 60.0
+
+
+def get_corpus_dir() -> Path:
+    xdg_state_home = os.getenv("XDG_STATE_HOME")
+    if xdg_state_home:
+        base = Path(xdg_state_home)
+    else:
+        base = Path.home() / ".local" / "state"
+    corpus_dir = base / "voice-stt" / "corpus"
+    try:
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(corpus_dir, 0o700)
+    except OSError:
+        pass
+    return corpus_dir
+
+
+def prune_corpus_if_needed(corpus_dir: Optional[Path] = None) -> int:
+    if corpus_dir is None:
+        corpus_dir = get_corpus_dir()
+    if not corpus_dir.exists():
+        return 0
+
+    wav_files = [
+        p for p in corpus_dir.glob("*.wav")
+        if not p.name.startswith(".tmp_") and p.is_file()
+    ]
+    if not wav_files:
+        return 0
+
+    now = time.time()
+    file_stats = []
+    total_bytes = 0
+    for p in wav_files:
+        try:
+            st = p.stat()
+            file_stats.append((p, st.st_mtime, st.st_size))
+            total_bytes += st.st_size
+        except OSError:
+            pass
+
+    if len(file_stats) <= MAX_CORPUS_FILES and total_bytes <= MAX_CORPUS_BYTES:
+        return 0
+
+    file_stats.sort(key=lambda x: x[1])
+
+    pruned = 0
+    for p, mtime, size in file_stats:
+        if (now - mtime) < CORPUS_GRACE_PERIOD_S:
+            continue
+        try:
+            p.unlink()
+            pruned += 1
+            total_bytes -= size
+            try:
+                state_dir = get_state_dir()
+                log_file = state_dir / "voice.log"
+                with open(log_file, "a", encoding="utf-8") as lf:
+                    lf.write(f"pruned diagnostic corpus file: {p.name}\n")
+            except Exception:
+                pass
+        except OSError:
+            pass
+        remaining_count = len(file_stats) - pruned
+        if remaining_count <= MAX_CORPUS_FILES and total_bytes <= MAX_CORPUS_BYTES:
+            break
+
+    return pruned
+
+
+def save_diagnostic_corpus(audio_source: Any, run_id: str, reason: str, sample_rate: int = 16000) -> Optional[str]:
+    try:
+        corpus_dir = get_corpus_dir()
+        if not corpus_dir.exists():
+            return None
+
+        try:
+            usage = shutil.disk_usage(corpus_dir)
+            if usage.free < MIN_FREE_SPACE_BYTES:
+                return None
+        except OSError:
+            return None
+
+        prune_corpus_if_needed(corpus_dir)
+
+        clean_reason = re.sub(r"[^a-zA-Z0-9_-]", "_", str(reason))
+        ts = int(time.time())
+        filename = f"{run_id}_{ts}_{clean_reason}.wav"
+        tmp_path = corpus_dir / f".tmp_{filename}"
+        final_path = corpus_dir / filename
+
+        if isinstance(audio_source, (str, Path)):
+            src_path = Path(audio_source)
+            if not src_path.exists():
+                return None
+            shutil.copyfile(str(src_path), str(tmp_path))
+        elif hasattr(audio_source, "shape") or isinstance(audio_source, (list, tuple)):
+            import numpy as np
+            import wave
+            audio_arr = np.asarray(audio_source, dtype=np.float32)
+            pcm = (np.clip(audio_arr, -1.0, 1.0) * 32767.0).astype(np.int16)
+            with wave.open(str(tmp_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(sample_rate)
+                wav.writeframes(pcm.tobytes())
+        else:
+            return None
+
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, final_path)
+        return f"corpus/{filename}"
+    except OSError as e:
+        print(f"Warning: failed to save diagnostic corpus ({e})", file=__import__('sys').stderr)
+        return None
+
+
+def purge_corpus(corpus_dir: Optional[Path] = None) -> tuple[int, int]:
+    if corpus_dir is None:
+        corpus_dir = get_corpus_dir()
+    if not corpus_dir.exists():
+        return 0, 0
+    count = 0
+    total_bytes = 0
+    for p in corpus_dir.iterdir():
+        if p.is_file() and (p.name.endswith(".wav") or p.name.startswith(".tmp_")):
+            try:
+                sz = p.stat().st_size
+                p.unlink()
+                count += 1
+                total_bytes += sz
+            except OSError:
+                pass
+    return count, total_bytes
 
 
 def get_metrics_enabled() -> bool:

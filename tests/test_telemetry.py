@@ -161,6 +161,20 @@ class TestPrivacy(TempXdgTestCase):
                     walk(i)
         walk(r)
 
+    def test_corpus_file_relative_path_privacy(self):
+        """D-09: corpus_file is strictly relative (corpus/{filename}.wav) and never contains system paths."""
+        r = t.build_record(
+            run_id='r_corp', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+            outcome='success', corpus_file='corpus/r_corp_123456_rtf_exceeded.wav',
+            config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                    'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0}
+        )
+        self.assertTrue(r['corpus_file'].startswith('corpus/'))
+        self.assertFalse(r['corpus_file'].startswith('/'))
+        import re
+        for pat in [r'/home/', r'/tmp/', r'/usr/', r'/etc/']:
+            self.assertIsNone(re.search(pat, r['corpus_file']))
+
 
 class TestCharsOnly(TempXdgTestCase):
     def test_chars_counts(self):

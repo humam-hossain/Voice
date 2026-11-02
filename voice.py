@@ -365,6 +365,18 @@ class Recorder:
 
         return paths, duration, should_delete
 
+    def get_full_audio(self) -> Optional[np.ndarray]:
+        with self._lock:
+            if not getattr(self, "frames", None):
+                return None
+            try:
+                full = np.concatenate(self.frames, axis=0)
+                if self.actual_sample_rate != self.target_sample_rate:
+                    full = resample_pcm(full, self.actual_sample_rate, self.target_sample_rate)
+                return full
+            except Exception:
+                return None
+
 
 def parse_device(value: Optional[str]) -> Optional[int | str]:
     if value is None or value == "":
@@ -1288,6 +1300,32 @@ def finalize_background_run(
                 if not chunks_data and run_state.get("chunks"):
                     chunks_data = run_state.get("chunks")
 
+                args = run_state.get("args")
+                capture_mode = getattr(args, "capture_corpus", None)
+                if not capture_mode:
+                    capture_mode = os.getenv("VOICEMODE_CORPUS_CAPTURE", "none").strip().lower()
+                else:
+                    capture_mode = str(capture_mode).strip().lower()
+
+                corpus_file = run_state.get("corpus_file")
+                if not corpus_file and capture_mode in ("all", "outliers"):
+                    should_capture = (capture_mode == "all") or (capture_mode == "outliers" and is_outlier)
+                    if should_capture:
+                        audio_src = run_state.get("full_audio")
+                        if audio_src is None:
+                            wav_paths = run_state.get("wav_paths")
+                            if wav_paths and len(wav_paths) == 1 and Path(wav_paths[0]).exists():
+                                audio_src = Path(wav_paths[0])
+                        if audio_src is not None:
+                            rid = run_state.get("run_id") or uuid.uuid4().hex
+                            corpus_file = voicemode_telemetry.save_diagnostic_corpus(
+                                audio_src,
+                                rid,
+                                outlier_reason or "manual_capture",
+                            )
+                            if corpus_file:
+                                run_state["corpus_file"] = corpus_file
+
                 record = voicemode_telemetry.build_record(
                     run_id=run_state.get("run_id") or uuid.uuid4().hex,
                     install_id=voicemode_telemetry.get_install_id(),
@@ -1306,7 +1344,7 @@ def finalize_background_run(
                     backend=backend_str,
                     outlier=is_outlier,
                     outlier_reason=outlier_reason,
-                    corpus_file=run_state.get("corpus_file"),
+                    corpus_file=corpus_file,
                     cold_load=cold_load,
                     failed_chunks=failed_chunks if failed_chunks else None,
                     chunks=chunks_data if chunks_data else None,
@@ -2582,6 +2620,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         raw_paths, duration, should_delete = recorder.stop_to_wav(args.save_dir)
         finalize_ms = round((time.monotonic() - t_fin_0) * 1000.0, 3)
         run_state["finalize_ms"] = finalize_ms
+        run_state["full_audio"] = recorder.get_full_audio()
         wav_paths = [Path(p) for p in (raw_paths if isinstance(raw_paths, (list, tuple)) else [raw_paths])]
         run_state["wav_paths"] = wav_paths
         run_state["should_delete"] = should_delete
@@ -3771,6 +3810,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--doctor", action="store_true", help="Run system pre-flight diagnostic probe.")
     parser.add_argument("--verify", action="store_true", help="Run end-to-end system verification suite.")
     parser.add_argument(
+        "--capture-corpus",
+        nargs="?",
+        const="outliers",
+        choices=("none", "outliers", "all"),
+        default=None,
+        help="Capture diagnostic audio corpus ('none', 'outliers', 'all'; default: none or VOICEMODE_CORPUS_CAPTURE)",
+    )
+    parser.add_argument(
+        "--purge-corpus",
+        action="store_true",
+        help="Purge all diagnostic audio corpus files and reclaim disk space",
+    )
+    parser.add_argument(
         "--tier",
         choices=("1", "2", "3", "all"),
         default="all",
@@ -3985,6 +4037,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if getattr(args, "purge_corpus", False):
+        count, reclaimed = voicemode_telemetry.purge_corpus()
+        mb = reclaimed / (1024.0 * 1024.0)
+        print(f"Purged {count} corpus audio files ({mb:.1f} MB reclaimed)", flush=True)
+        return 0
 
     if getattr(args, "kill", False):
         return kill_all_daemons(args)
