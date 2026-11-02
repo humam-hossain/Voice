@@ -113,6 +113,18 @@ class TestSchemaV1(TempXdgTestCase):
         self.assertEqual(r['tts'], t.tts_reserved())
         self.assertEqual(r['source'], 'stt')
 
+    def test_partial_success_outcome(self):
+        """D-03: validate_record accepts outcome='partial_success'."""
+        r = t.build_record(run_id='r_part', install_id=t.get_install_id(), ts_start=1.0, ts_end=2.0,
+                          outcome='partial_success', failed_chunks=[1],
+                          chunks=[{'idx': 1, 'audio_s': 1.0, 'decode_ms': 100.0, 'rtf': 0.1,
+                                   'outlier': False, 'retries': 0, 'ok': False}],
+                          config={'model': 'm', 'device': 'cpu', 'compute_type': 'int8',
+                                  'beam_size': 1, 'vad_filter': True, 'language': 'en', 'chunk_s': 180.0})
+        self.assertEqual(r['outcome'], 'partial_success')
+        self.assertEqual(r['failed_chunks'], [1])
+        self.assertEqual(len(r['chunks']), 1)
+
 
 class TestPrivacy(TempXdgTestCase):
     def test_allowlist_rejects_extra_keys(self):

@@ -63,7 +63,8 @@ SCHEMA_V1_KEYS = {
     "schema", "source", "run_id", "install_id", "ts_start", "ts_end",
     "outcome", "error_stage", "actual", "audio_s",
     "chars_out", "chars_typed", "fallback_used", "insert_ok",
-    "segments", "config", "backend", "tts"
+    "segments", "config", "backend", "tts",
+    "outlier", "outlier_reason", "corpus_file", "cold_load", "failed_chunks", "chunks"
 }
 LEGACY_RECORD_KEYS = {"predicted", "calibration_key"}
 
@@ -72,10 +73,34 @@ NESTED_KEYS = {
     "segments": {"idx", "audio_s", "decode_ms", "chars", "ok", "fallback", "avg_logprob", "compression_ratio", "no_speech_prob", "temperature", "vad_audio_s", "error_type"},
     "config": {"model", "device", "compute_type", "beam_size", "vad_filter", "language", "chunk_s"},
     "tts": {"predicted_ms", "actual_ms", "chars", "voice", "backend", "synth_ms", "play_ms"},
+    "chunks": {"idx", "audio_s", "decode_ms", "rtf", "outlier", "retries", "ok"},
 }
 LEGACY_NESTED_KEYS = {
     "predicted": {"shown_s", "shown_at_epoch", "source", "key_level", "n", "confidence", "revisions", "actual_s"},
 }
+
+
+def classify_outlier(audio_s: float, decode_ms: float) -> tuple[bool, Optional[str]]:
+    """D-01: Classifies whether a transcription run is an outlier based on RTF or tail latency."""
+    try:
+        rtf_threshold = float(os.getenv("VOICEMODE_OUTLIER_RTF_THRESHOLD", "1.0"))
+    except ValueError:
+        rtf_threshold = 1.0
+    try:
+        tail_s_threshold = float(os.getenv("VOICEMODE_OUTLIER_TAIL_S", "10.0"))
+    except ValueError:
+        tail_s_threshold = 10.0
+
+    audio_s = float(audio_s or 0.0)
+    decode_ms = float(decode_ms or 0.0)
+    decode_s = decode_ms / 1000.0
+    rtf = (decode_s / audio_s) if audio_s > 0 else 0.0
+
+    if rtf > rtf_threshold:
+        return True, "rtf_exceeded"
+    elif decode_s > tail_s_threshold:
+        return True, "tail_decode"
+    return False, None
 
 
 def _empty_actual() -> dict:
@@ -100,7 +125,7 @@ def validate_record(record: dict) -> dict:
         raise ValueError("schema must be 1")
     if record.get("source") not in {"stt", "tts"}:
         raise ValueError("invalid source")
-    if record.get("outcome") not in {"success", "cancelled", "error", "watchdog_timeout", "abandoned"}:
+    if record.get("outcome") not in {"success", "partial_success", "cancelled", "error", "watchdog_timeout", "abandoned"}:
         raise ValueError("invalid outcome")
     
     actual = record.get("actual")
@@ -134,6 +159,27 @@ def validate_record(record: dict) -> dict:
             for k in seg:
                 if k not in NESTED_KEYS["segments"]:
                     raise ValueError(f"unknown key: segments.{k}")
+
+    chunks = record.get("chunks")
+    if chunks is not None:
+        if not isinstance(chunks, list):
+            raise ValueError("chunks must be a list")
+        for ch in chunks:
+            if not isinstance(ch, dict):
+                raise ValueError("chunk must be a dict")
+            for k in ch:
+                if k not in NESTED_KEYS["chunks"]:
+                    raise ValueError(f"unknown key: chunks.{k}")
+
+    failed_chunks = record.get("failed_chunks")
+    if failed_chunks is not None:
+        if not isinstance(failed_chunks, list):
+            raise ValueError("failed_chunks must be a list")
+
+    if "outlier" in record and not isinstance(record["outlier"], bool):
+        raise ValueError("outlier must be a bool")
+    if "cold_load" in record and not isinstance(record["cold_load"], bool):
+        raise ValueError("cold_load must be a bool")
     
     # Ensure JSON serializable
     json.dumps(record)
@@ -188,14 +234,12 @@ def get_install_id() -> str:
     return install_id
 
 
-def extract_hierarchy_keys(config: Optional[dict], backend: Optional[str]) -> dict[str, str]:
-    """Extracts 4-tier hierarchy keys: L0 (8 fields) -> L1 (6 fields) -> L2 (4 fields) -> L3 (prior model)."""
-    cfg = config or {}
-    model = cfg.get("model") or "medium"
 def build_record(*, run_id, install_id, ts_start, ts_end, outcome, error_stage=None,
                   actual=None, audio_s=0.0, chars_out=0, chars_typed=0,
                   fallback_used=False, insert_ok=False, segments=None, config=None,
-                  backend=None, tts=None, source="stt", **kwargs) -> dict:
+                  backend=None, tts=None, source="stt",
+                  outlier=False, outlier_reason=None, corpus_file=None,
+                  cold_load=False, failed_chunks=None, chunks=None, **kwargs) -> dict:
     record = {}
     record["schema"] = 1
     record["source"] = source  # no TTS code path may call with source="tts" in this phase
@@ -246,6 +290,13 @@ def build_record(*, run_id, install_id, ts_start, ts_end, outcome, error_stage=N
     
     record["backend"] = backend
     record["tts"] = tts if tts is not None else tts_reserved()
+
+    record["outlier"] = bool(outlier)
+    record["outlier_reason"] = outlier_reason
+    record["corpus_file"] = corpus_file
+    record["cold_load"] = bool(cold_load)
+    record["failed_chunks"] = failed_chunks
+    record["chunks"] = chunks
     
     return validate_record(record)
 

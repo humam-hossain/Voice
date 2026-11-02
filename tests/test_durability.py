@@ -161,5 +161,69 @@ class TestDegradedDurability(TempXdgTestCase):
             self.assertFalse(second)
 
 
+class TestOutlierDetection(TempXdgTestCase):
+    """Verify outlier detection and focus safety (D-01, D-02, D-06)."""
+
+    def test_outlier_rtf_exceeded(self):
+        """classify_outlier(2.0, 2500.0) returns (True, 'rtf_exceeded')."""
+        is_outlier, reason = voicemode_telemetry.classify_outlier(2.0, 2500.0)
+        self.assertTrue(is_outlier)
+        self.assertEqual(reason, "rtf_exceeded")
+
+    def test_outlier_tail_decode(self):
+        """classify_outlier(20.0, 12000.0) returns (True, 'tail_decode')."""
+        is_outlier, reason = voicemode_telemetry.classify_outlier(20.0, 12000.0)
+        self.assertTrue(is_outlier)
+        self.assertEqual(reason, "tail_decode")
+
+    def test_outlier_normal_run_not_outlier(self):
+        """classify_outlier(5.0, 1500.0) returns (False, None)."""
+        is_outlier, reason = voicemode_telemetry.classify_outlier(5.0, 1500.0)
+        self.assertFalse(is_outlier)
+        self.assertIsNone(reason)
+
+    def test_outlier_threshold_env_overrides(self):
+        """Thresholds can be customized via VOICEMODE_OUTLIER_RTF_THRESHOLD and VOICEMODE_OUTLIER_TAIL_S."""
+        with patch.dict(os.environ, {"VOICEMODE_OUTLIER_RTF_THRESHOLD": "0.5"}):
+            is_outlier, reason = voicemode_telemetry.classify_outlier(2.0, 1200.0)
+            self.assertTrue(is_outlier)
+            self.assertEqual(reason, "rtf_exceeded")
+
+        with patch.dict(os.environ, {"VOICEMODE_OUTLIER_TAIL_S": "5.0"}):
+            is_outlier, reason = voicemode_telemetry.classify_outlier(20.0, 6000.0)
+            self.assertTrue(is_outlier)
+            self.assertEqual(reason, "tail_decode")
+
+    def test_outlier_focus_safety_zero_notifications_or_beeps(self):
+        """D-06: Outlier detection does not trigger notifications or cues, protecting window focus."""
+        with patch("voice.notify") as mock_notify, \
+             patch("voice.play_cue") as mock_cue:
+            ev = MagicMock()
+            ev.text = "outlier test"
+            ev.audio_s = 2.0
+            ev.decode_ms = 3000.0  # RTF = 1.5 > 1.0
+            ev.failure_type = None
+            ev.fallback = False
+            ev.avg_logprob = -0.1
+            ev.compression_ratio = 1.0
+            ev.no_speech_prob = 0.0
+            ev.temperature = 0.0
+            ev.vad_audio_s = 2.0
+            run_state = {
+                "run_id": "test-outlier-run",
+                "audio_s": 2.0,
+                "t_start": time.monotonic() - 5.0,
+                "results": {1: ev},
+                "args": voice.parse_args([]),
+            }
+            voice.finalize_background_run(run_state, outcome="success")
+            # Verify no notifications or sound cues triggered by outlier
+            mock_notify.assert_not_called()
+            mock_cue.assert_not_called()
+            # Verify no notifications or sound cues triggered by outlier
+            mock_notify.assert_not_called()
+            mock_cue.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

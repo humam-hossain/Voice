@@ -1257,6 +1257,37 @@ def finalize_background_run(
                     if isinstance(ev, TranscriptionEvidence)
                 )
 
+                chunks_data = []
+                failed_chunks = []
+                for idx in sorted(results.keys()) if hasattr(results, "keys") else []:
+                    ev = results[idx]
+                    if isinstance(ev, TranscriptionEvidence):
+                        c_audio = _clean_float(ev.audio_s) or 0.0
+                        c_dec = _clean_float(ev.decode_ms) or 0.0
+                        c_rtf = round((c_dec / 1000.0) / c_audio, 3) if c_audio > 0 else 0.0
+                        c_outlier, _ = voicemode_telemetry.classify_outlier(c_audio, c_dec)
+                        is_ok = ev.failure_type is None
+                        if not is_ok:
+                            failed_chunks.append(idx)
+                        chunks_data.append({
+                            "idx": idx,
+                            "audio_s": c_audio,
+                            "decode_ms": c_dec,
+                            "rtf": c_rtf,
+                            "outlier": c_outlier,
+                            "retries": 1 if ev.fallback else 0,
+                            "ok": is_ok,
+                        })
+
+                tot_audio_s = run_state.get("audio_s", 0.0)
+                is_outlier, outlier_reason = voicemode_telemetry.classify_outlier(tot_audio_s, decode_ms_total or 0.0)
+                cold_load = voicemode_telemetry.check_and_mark_boot_session()
+
+                if not failed_chunks and run_state.get("failed_chunks"):
+                    failed_chunks = run_state.get("failed_chunks")
+                if not chunks_data and run_state.get("chunks"):
+                    chunks_data = run_state.get("chunks")
+
                 record = voicemode_telemetry.build_record(
                     run_id=run_state.get("run_id") or uuid.uuid4().hex,
                     install_id=voicemode_telemetry.get_install_id(),
@@ -1265,7 +1296,7 @@ def finalize_background_run(
                     outcome=outcome,
                     error_stage=error_stage or run_state.get("error_stage"),
                     actual=actual_data,
-                    audio_s=run_state.get("audio_s", 0.0),
+                    audio_s=tot_audio_s,
                     chars_out=chars_out,
                     chars_typed=chars_typed_val,
                     fallback_used=fallback_used,
@@ -1273,6 +1304,12 @@ def finalize_background_run(
                     segments=segments_data,
                     config=config_data,
                     backend=backend_str,
+                    outlier=is_outlier,
+                    outlier_reason=outlier_reason,
+                    corpus_file=run_state.get("corpus_file"),
+                    cold_load=cold_load,
+                    failed_chunks=failed_chunks if failed_chunks else None,
+                    chunks=chunks_data if chunks_data else None,
                 )
                 voicemode_telemetry.append_ledger_row(record)
                 row_written = True
@@ -2619,6 +2656,10 @@ def run_background_recording(args: argparse.Namespace) -> int:
         final_total_s = round(time.monotonic() - t_start, 3)
         run_state["total_duration_s"] = final_total_s
 
+        failed_chunks = [idx for idx, ev in sorted_items if getattr(ev, "failure_type", None) is not None]
+        if failed_chunks:
+            run_state["failed_chunks"] = failed_chunks
+
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
@@ -2640,7 +2681,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         else:
             _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
             notify(APP_NAME, "No speech detected.", args)
-        outcome = "success"
+        outcome = "partial_success" if (failed_chunks and text) else "success"
         return 0
     except STTStageFailure as exc:
         outcome = "error"
