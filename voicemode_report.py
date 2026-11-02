@@ -146,9 +146,21 @@ def filter_records(
     last: Optional[int | str] = 200,
     model: Optional[str] = None,
     device: Optional[str] = None,
+    outliers: bool = False,
 ) -> list[dict]:
     """Filters records by time window, limit count, and model/device attributes (D-14, D-16)."""
     filtered = list(records)
+
+    if outliers:
+        def _is_outlier(r: dict) -> bool:
+            if r.get("outlier") is True:
+                return True
+            aud, wait, _ = extract_run_latency(r)
+            act = r.get("actual") or {}
+            dec_ms = act.get("decode_ms") or 0.0
+            is_out, _ = voicemode_telemetry.classify_outlier(aud, dec_ms)
+            return is_out
+        filtered = [r for r in filtered if _is_outlier(r)]
 
     if since:
         since_epoch = parse_since_argument(since)
@@ -219,7 +231,7 @@ def extract_run_latency(rec: dict) -> tuple[float, float, float]:
 
 
 def compute_report_metrics(records: list[dict]) -> dict:
-    """Computes aggregate metrics: total runs, median wait latency, p90 latency, mean RTF, stage breakdowns."""
+    """Computes aggregate metrics: total runs, median wait latency, p90 latency, mean RTF, outliers, drift %, and stratified duration breakdowns."""
     total_runs = len(records)
     if total_runs == 0:
         return {
@@ -227,6 +239,19 @@ def compute_report_metrics(records: list[dict]) -> dict:
             "median_wait_s": None,
             "p90_latency_s": None,
             "mean_rtf": None,
+            "outlier_count": 0,
+            "outlier_rate": 0.0,
+            "drift_pct": None,
+            "stratified": {
+                "short": {"count": 0, "median_wait_s": None, "median_rtf": None},
+                "medium": {"count": 0, "median_wait_s": None, "median_rtf": None},
+                "long": {"count": 0, "median_wait_s": None, "median_rtf": None},
+            },
+            "stratified_duration": {
+                "short": {"count": 0, "median_wait_s": None, "median_rtf": None},
+                "medium": {"count": 0, "median_wait_s": None, "median_rtf": None},
+                "long": {"count": 0, "median_wait_s": None, "median_rtf": None},
+            },
             "last_run_timestamp": None,
             "stage_medians": {},
             "stage_p90s": {},
@@ -238,6 +263,13 @@ def compute_report_metrics(records: list[dict]) -> dict:
     decode_vals: list[float] = []
     finalize_vals: list[float] = []
     insert_vals: list[float] = []
+
+    outlier_count = 0
+    buckets = {
+        "short": {"count": 0, "waits": [], "rtfs": []},
+        "medium": {"count": 0, "waits": [], "rtfs": []},
+        "long": {"count": 0, "waits": [], "rtfs": []},
+    }
 
     for r in records:
         audio_s, wait_s, rtf = extract_run_latency(r)
@@ -262,9 +294,46 @@ def compute_report_metrics(records: list[dict]) -> dict:
         if audio_s > 0 and decode_s > 0:
             rtf_vals.append(round(decode_s / audio_s, 3))
 
+        dec_ms = act.get("decode_ms") or 0.0
+        if r.get("outlier") is True or voicemode_telemetry.classify_outlier(audio_s, dec_ms)[0]:
+            outlier_count += 1
+
+        if audio_s < 5.0:
+            b = buckets["short"]
+        elif audio_s <= 30.0:
+            b = buckets["medium"]
+        else:
+            b = buckets["long"]
+        b["count"] += 1
+        if wait_s > 0:
+            b["waits"].append(wait_s)
+        if rtf > 0:
+            b["rtfs"].append(rtf)
+
     median_wait_s = round(statistics.median(wait_latencies), 3) if wait_latencies else None
     p90_latency_s = _percentile(wait_latencies, 0.90) if wait_latencies else None
     mean_rtf = round(statistics.mean(rtf_vals), 3) if rtf_vals else None
+
+    outlier_rate = round(outlier_count / total_runs, 3) if total_runs > 0 else 0.0
+
+    stratified = {}
+    for name, b in buckets.items():
+        med_w = round(statistics.median(b["waits"]), 3) if b["waits"] else None
+        med_r = round(statistics.median(b["rtfs"]), 3) if b["rtfs"] else None
+        stratified[name] = {
+            "count": b["count"],
+            "median_wait_s": med_w,
+            "median_rtf": med_r,
+        }
+
+    # Drift calculation: compare median wait_s of recent 20 runs vs lifetime baseline (min 5 runs)
+    drift_pct = None
+    if len(wait_latencies) >= 5 and median_wait_s and median_wait_s > 0:
+        recent_20 = records[-20:]
+        recent_waits = [extract_run_latency(rec)[1] for rec in recent_20 if extract_run_latency(rec)[1] > 0]
+        if recent_waits:
+            recent_med = statistics.median(recent_waits)
+            drift_pct = round(((recent_med - median_wait_s) / median_wait_s) * 100.0, 1)
 
     stage_medians: dict[str, float] = {}
     stage_p90s: dict[str, float] = {}
@@ -286,6 +355,11 @@ def compute_report_metrics(records: list[dict]) -> dict:
         "median_wait_s": median_wait_s,
         "p90_latency_s": p90_latency_s,
         "mean_rtf": mean_rtf,
+        "outlier_count": outlier_count,
+        "outlier_rate": outlier_rate,
+        "drift_pct": drift_pct,
+        "stratified": stratified,
+        "stratified_duration": stratified,
         "last_run_timestamp": last_ts,
         "stage_medians": stage_medians,
         "stage_p90s": stage_p90s,
@@ -444,9 +518,21 @@ def render_terminal_summary(
         wait_str = f"{wait_s:.2f}s" if wait_s else "N/A"
         rtf_str = f"{rtf_val:.2f}x" if rtf_val else "N/A"
 
+        is_outlier = r.get("outlier") is True or voicemode_telemetry.classify_outlier(audio_s, act.get("decode_ms", 0))[0] is True
+        status_col = "[OUTLIER]" if is_outlier else outcome
+
+        audio_tag = ""
+        c_file = r.get("corpus_file")
+        if c_file:
+            corpus_p = voicemode_telemetry.get_corpus_dir() / Path(c_file).name
+            if corpus_p.exists() or Path(c_file).exists():
+                audio_tag = " [audio: wav]"
+            else:
+                audio_tag = " [audio: pruned]"
+
         lines.append(
             f"{run_id:<14} {dt_str:<17} {audio_str:>7} {wait_str:>7} {rtf_str:>7} "
-            f"{outcome:<8} {stages}"
+            f"{status_col:<9} {stages}{audio_tag}"
         )
 
     report_path = voicemode_telemetry.get_state_dir() / "report.html"
@@ -466,14 +552,20 @@ def render_latency_scatter_svg(records: list[dict], metrics: dict) -> str:
     plot_w = w - pad_l - pad_r
     plot_h = h - pad_t - pad_b
 
+    COLOR_OUTLIER = "#f43f5e"
+
     valid_pts = []
     for r in records:
         aud, wait, _ = extract_run_latency(r)
         if aud > 0 and wait > 0:
-            valid_pts.append((aud, wait, str(r.get("run_id", ""))))
+            act = r.get("actual") or {}
+            dec_ms = act.get("decode_ms") or 0.0
+            is_outlier = r.get("outlier") is True or voicemode_telemetry.classify_outlier(aud, dec_ms)[0] is True
+            reason = r.get("outlier_reason") or ("rtf_exceeded" if aud > 0 and (dec_ms / 1000.0) / aud > 1.0 else "tail_decode")
+            valid_pts.append((aud, wait, str(r.get("run_id", "")), is_outlier, reason))
 
-    max_x = max(10.0, max((x for x, _, _ in valid_pts), default=30.0)) * 1.1
-    max_y = max(5.0, max((y for _, y, _ in valid_pts), default=10.0)) * 1.1
+    max_x = max(10.0, max((x for x, _, _, _, _ in valid_pts), default=30.0)) * 1.1
+    max_y = max(5.0, max((y for _, y, _, _, _ in valid_pts), default=10.0)) * 1.1
 
     elements = []
     for step in (0.25, 0.5, 0.75, 1.0):
@@ -486,14 +578,23 @@ def render_latency_scatter_svg(records: list[dict], metrics: dict) -> str:
         elements.append(f'<text x="{x:.1f}" y="{pad_t + plot_h + 16}" fill="{COLOR_MUTED}" font-size="10" text-anchor="middle">{vx:.0f}s</text>')
         elements.append(f'<text x="{pad_l - 8}" y="{y + 3:.1f}" fill="{COLOR_MUTED}" font-size="10" text-anchor="end">{vy:.1f}s</text>')
 
-    for aud, wait, rid in valid_pts:
+    for aud, wait, rid, is_outlier, reason in valid_pts:
         cx = pad_l + (min(aud, max_x) / max_x) * plot_w
         cy = pad_t + plot_h - (min(wait, max_y) / max_y) * plot_h
-        elements.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="#38bdf8" opacity="0.85" class="chart-dot">'
-            f'<title>Run {html.escape(rid)}: Audio {aud:.1f}s, Wait {wait:.2f}s</title>'
-            f'</circle>'
-        )
+        if is_outlier:
+            d = 5.0
+            pts_str = f"{cx:.1f},{cy-d:.1f} {cx+d:.1f},{cy:.1f} {cx:.1f},{cy+d:.1f} {cx-d:.1f},{cy:.1f}"
+            elements.append(
+                f'<polygon points="{pts_str}" stroke="{COLOR_OUTLIER}" stroke-width="2" fill="none" class="chart-outlier">'
+                f'<title>Run {html.escape(rid)} (Outlier: {html.escape(reason)}): Audio {aud:.1f}s, Wait {wait:.2f}s</title>'
+                f'</polygon>'
+            )
+        else:
+            elements.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="#38bdf8" opacity="0.85" class="chart-dot">'
+                f'<title>Run {html.escape(rid)}: Audio {aud:.1f}s, Wait {wait:.2f}s</title>'
+                f'</circle>'
+            )
 
     elements.append(f'<text x="{pad_l + plot_w / 2}" y="{h - 6}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle">Audio Duration (s)</text>')
     elements.append(f'<text x="14" y="{pad_t + plot_h / 2}" fill="{COLOR_MUTED}" font-size="11" text-anchor="middle" transform="rotate(-90 14 {pad_t + plot_h / 2})">Wait Latency (s)</text>')
@@ -513,15 +614,21 @@ def render_rtf_trend_svg(records: list[dict], metrics: dict) -> str:
     plot_w = w - pad_l - pad_r
     plot_h = h - pad_t - pad_b
 
+    COLOR_OUTLIER = "#f43f5e"
+
     pts = []
     for i, r in enumerate(records):
         aud, _, rtf = extract_run_latency(r)
         if aud > 0 and rtf > 0:
-            pts.append((str(r.get("run_id", f"run-{i}")), rtf))
+            act = r.get("actual") or {}
+            dec_ms = act.get("decode_ms") or 0.0
+            is_outlier = r.get("outlier") is True or voicemode_telemetry.classify_outlier(aud, dec_ms)[0] is True
+            reason = r.get("outlier_reason") or ("rtf_exceeded" if rtf > 1.0 else "tail_decode")
+            pts.append((str(r.get("run_id", f"run-{i}")), rtf, is_outlier, reason))
 
     max_rtf = 1.5
     if pts:
-        max_r = max(r for _, r in pts)
+        max_r = max(r for _, r, _, _ in pts)
         max_rtf = max(1.5, max_r * 1.1)
 
     elements = []
@@ -545,16 +652,25 @@ def render_rtf_trend_svg(records: list[dict], metrics: dict) -> str:
         coords = []
         dots = []
         n = len(pts)
-        for i, (rid, rtf) in enumerate(pts):
+        for i, (rid, rtf, is_outlier, reason) in enumerate(pts):
             cx = pad_l + (plot_w / 2 if n == 1 else (i / (n - 1)) * plot_w)
             cy = pad_t + plot_h - (min(rtf, max_rtf) / max_rtf) * plot_h
             coords.append(f"{cx:.1f},{cy:.1f}")
-            color = COLOR_GREEN if rtf < 1.0 else COLOR_AMBER
-            dots.append(
-                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{color}" class="chart-dot">'
-                f'<title>Run {html.escape(rid)}: RTF {rtf:.2f}x</title>'
-                f'</circle>'
-            )
+            if is_outlier:
+                d = 4.5
+                pts_str = f"{cx:.1f},{cy-d:.1f} {cx+d:.1f},{cy:.1f} {cx:.1f},{cy+d:.1f} {cx-d:.1f},{cy:.1f}"
+                dots.append(
+                    f'<polygon points="{pts_str}" stroke="{COLOR_OUTLIER}" stroke-width="2" fill="none" class="chart-outlier">'
+                    f'<title>Run {html.escape(rid)} (Outlier: {html.escape(reason)}): RTF {rtf:.2f}x</title>'
+                    f'</polygon>'
+                )
+            else:
+                color = COLOR_GREEN if rtf < 1.0 else COLOR_AMBER
+                dots.append(
+                    f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="{color}" class="chart-dot">'
+                    f'<title>Run {html.escape(rid)}: RTF {rtf:.2f}x</title>'
+                    f'</circle>'
+                )
 
         elements.append(f'<polyline points="{" ".join(coords)}" fill="none" stroke="#38bdf8" stroke-width="2" />')
         elements.extend(dots)
@@ -916,6 +1032,12 @@ def render_html_report(
     p90_str = f"{p90:.2f}s" if p90 is not None else "N/A"
     rtf_str = f"{rtf:.2f}x" if rtf is not None else "N/A"
 
+    outlier_count = metrics.get("outlier_count", 0)
+    outlier_rate = metrics.get("outlier_rate", 0.0)
+    outlier_rate_str = f"{outlier_rate * 100:.1f}%" if outlier_rate is not None else "0.0%"
+    drift_pct = metrics.get("drift_pct")
+    drift_str = f"{drift_pct:+.1f}%" if drift_pct is not None else "N/A"
+
     hero_cards_html = f"""
     <div class="hero-grid">
       <div class="card hero-card">
@@ -933,6 +1055,11 @@ def render_html_report(
       <div class="card hero-card">
         <div class="label">Mean RTF</div>
         <div class="value">{rtf_str}</div>
+      </div>
+      <div class="card hero-card">
+        <div class="label">Outlier Runs</div>
+        <div class="value">{outlier_count} <span style="font-size: 0.85rem; color: #f43f5e;">({outlier_rate_str})</span></div>
+        <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px;">Drift: {drift_str}</div>
       </div>
     </div>
     """

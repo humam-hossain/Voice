@@ -36,6 +36,9 @@ def _make_record(
     device="cpu",
     outcome="success",
     ts_start=None,
+    outlier=False,
+    outlier_reason=None,
+    corpus_file=None,
 ):
     now = time.time()
     t_start = ts_start if ts_start is not None else (now - 10.0)
@@ -82,6 +85,9 @@ def _make_record(
             "chunk_s": 180.0,
         },
         "backend": f"{device}, int8",
+        "outlier": outlier,
+        "outlier_reason": outlier_reason,
+        "corpus_file": corpus_file,
     }
 
 
@@ -872,6 +878,71 @@ class TestXdgOpenSecurity(TempXdgTestCase):
 
             self.assertEqual(code, 0)
             mock_open.assert_called_once()
+
+
+class TestReportOutliersAndDrift(TempXdgTestCase):
+    """Verify outlier visualization, drift tracking, and stratified latency reporting (D-04, D-05, D-16)."""
+
+    def test_outliers_filter_records(self):
+        """filter_records(..., outliers=True) filters exclusively to outlier records."""
+        r_normal = _make_record(run_id="r1", audio_s=5.0, decode_ms=1000.0, outlier=False)
+        r_outlier1 = _make_record(run_id="r2", audio_s=2.0, decode_ms=3000.0, outlier=True, outlier_reason="rtf_exceeded")
+        r_outlier2 = _make_record(run_id="r3", audio_s=20.0, decode_ms=12000.0, outlier=False)  # classified as outlier by decode_ms > 10.0s
+        records = [r_normal, r_outlier1, r_outlier2]
+
+        outliers = voicemode_report.filter_records(records, outliers=True)
+        self.assertEqual(len(outliers), 2)
+        outlier_ids = {r["run_id"] for r in outliers}
+        self.assertEqual(outlier_ids, {"r2", "r3"})
+
+    def test_outliers_drift_calculation(self):
+        """compute_report_metrics calculates drift_pct on synthetic upward shift."""
+        # Create 30 records with an upward latency shift in recent runs
+        records = [_make_record(run_id=f"r{i}", actual_s=1.0) for i in range(20)]
+        records.extend([_make_record(run_id=f"r{i}", actual_s=2.0) for i in range(20, 30)])
+
+        metrics = voicemode_report.compute_report_metrics(records)
+        self.assertIsNotNone(metrics["drift_pct"])
+        self.assertGreater(metrics["drift_pct"], 0)
+
+    def test_outliers_stratified_duration_metrics(self):
+        """Stratified duration metrics calculate short (<5s), medium (5-30s), and long (>30s) buckets."""
+        r_short = _make_record(run_id="s1", audio_s=3.0, actual_s=1.0, decode_ms=900.0)
+        r_med = _make_record(run_id="m1", audio_s=15.0, actual_s=4.0, decode_ms=3500.0)
+        r_long = _make_record(run_id="l1", audio_s=45.0, actual_s=12.0, decode_ms=10000.0)
+        records = [r_short, r_med, r_long]
+
+        metrics = voicemode_report.compute_report_metrics(records)
+        strat = metrics["stratified"]
+        self.assertEqual(strat["short"]["count"], 1)
+        self.assertEqual(strat["medium"]["count"], 1)
+        self.assertEqual(strat["long"]["count"], 1)
+        self.assertAlmostEqual(strat["short"]["median_wait_s"], 1.0, places=1)
+        self.assertAlmostEqual(strat["medium"]["median_wait_s"], 4.0, places=1)
+        self.assertAlmostEqual(strat["long"]["median_wait_s"], 12.0, places=1)
+
+    def test_outliers_render_latency_scatter_svg_contains_crimson_markers(self):
+        """render_latency_scatter_svg contains #f43f5e and chart-outlier for outlier points."""
+        r_normal = _make_record(run_id="norm", audio_s=4.0, actual_s=1.5, decode_ms=1200.0, outlier=False)
+        r_outlier = _make_record(run_id="out", audio_s=2.0, actual_s=3.5, decode_ms=3000.0, outlier=True, outlier_reason="rtf_exceeded")
+        records = [r_normal, r_outlier]
+        metrics = voicemode_report.compute_report_metrics(records)
+
+        svg = voicemode_report.render_latency_scatter_svg(records, metrics)
+        self.assertIn("#f43f5e", svg)
+        self.assertIn("chart-outlier", svg)
+        self.assertIn("<polygon", svg)
+
+    def test_outliers_render_terminal_summary_status(self):
+        """render_terminal_summary displays [OUTLIER] tag and [audio: pruned] when corpus WAV is missing."""
+        r = _make_record(
+            run_id="out-run", audio_s=2.0, actual_s=3.5, decode_ms=3000.0,
+            outlier=True, corpus_file="corpus/nonexistent.wav"
+        )
+        metrics = voicemode_report.compute_report_metrics([r])
+        summary = voicemode_report.render_terminal_summary([r], metrics)
+        self.assertIn("[OUTLIER]", summary)
+        self.assertIn("[audio: pruned]", summary)
 
 
 if __name__ == "__main__":

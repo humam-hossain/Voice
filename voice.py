@@ -39,8 +39,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import numpy as np
-
 import voicemode_telemetry
 
 CTRL_B = "\x02"
@@ -140,6 +138,7 @@ def resample_pcm(audio: np.ndarray, orig_sr: int, target_sr: int = 16000) -> np.
     """Resample 1D or 2D audio array from orig_sr to target_sr using linear interpolation."""
     if orig_sr == target_sr:
         return audio
+    import numpy as np
     num_samples = int(round(len(audio) * float(target_sr) / orig_sr))
     orig_idx = np.arange(len(audio))
     target_idx = np.linspace(0, len(audio) - 1, num_samples)
@@ -370,6 +369,7 @@ class Recorder:
             if not getattr(self, "frames", None):
                 return None
             try:
+                import numpy as np
                 full = np.concatenate(self.frames, axis=0)
                 if self.actual_sample_rate != self.target_sample_rate:
                     full = resample_pcm(full, self.actual_sample_rate, self.target_sample_rate)
