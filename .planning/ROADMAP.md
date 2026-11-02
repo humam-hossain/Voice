@@ -156,7 +156,7 @@ Plans:
   4. The dictation → ETA → report loop survives UID ≠ 1000, unset `XDG_RUNTIME_DIR`, 44.1 kHz multi-chunk audio, cold boot, 4 GB RAM, a read-only state directory, and a full disk without breaking transcription.
   5. `docs/telemetry.md` and the README document schema, privacy, opt-in capture, environment variables, and deletion; TTS-reserved fields are present with no TTS priors mixed in; the evaluation protocol (median absolute error, p90, signed bias, overrun share, stratified) is recorded before collection.
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 **Wave 1**
 
 - [x] 10-01-PLAN.md
@@ -164,7 +164,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 10-02-PLAN.md
+- [x] 10-02-PLAN.md
 
 ### Phase 11: Voice Desktop Pop-up UI
 
