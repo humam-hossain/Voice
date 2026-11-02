@@ -20,7 +20,9 @@ Both `voice` and `voicemode` command names are installed as identical entry poin
 | `SUPER + T` | **Read Selected Text (TTS)** | Global desktop | Synthesizes highlighted text (`wl-paste --primary`) via Kokoro ONNX |
 | `SUPER + T` *(while speaking)* | **Stop Active Speech** | Global desktop | Immediately halts active audio playback |
 | `voice --report` | **Latency Performance Report** | Terminal | Displays stage timing breakdown, median wait, P90, and RTF metrics |
-| `voice --doctor` | **Pre-Flight Diagnostics** | Terminal | Inspects binaries, mic volume/mute, model weights, keybinds, and PIDs |
+| `voice --report --outliers` | **Outlier Latency Report** | Terminal | Filters performance report strictly to runs exceeding RTF / tail latency thresholds |
+| `voice --purge-corpus` | **Purge Diagnostic Corpus** | Terminal | Deletes all saved diagnostic audio files from disk and reclaims storage |
+| `voice --doctor` | **Pre-Flight Diagnostics** | Terminal | Inspects binaries, audio, models, keybinds, PIDs, hardware backends, and paths |
 | `voice --verify` | **3-Tier E2E Verification** | Terminal | Runs automated pipeline self-test (~3.3s) and interactive app matrix |
 | `voice --kill` | **Daemon Recovery** | Terminal | Terminates active background workers and purges stale PID locks |
 | `voice --status` | **Daemon Status Check** | Terminal | Reports active recording/transcribing/idle status and PID health |
@@ -98,6 +100,8 @@ Below is a complete reference of all operational modes and commands you can run 
 | `voice --terminal` | Run in interactive terminal-only mode. Press `Ctrl+B` to start recording, press `Ctrl+B` again to transcribe and paste. Press `Ctrl+C` to exit. | `voice --terminal` |
 | `voice --watch` | Default action when no mode flag is given. Continuously monitors and streams background STT and TTS activity logs in real time. | `voice --watch` |
 | `voice --check` | Test Faster-Whisper model loading and print the selected device and quantization backend, then exit. | `voice --check --allow-download` |
+| `voice --capture-corpus <mode>` | Enable diagnostic audio corpus capture (`none`, `outliers`, or `all`) with FIFO limits (50 files / 100 MB). | `voice --toggle --capture-corpus outliers` |
+| `voice --purge-corpus` | Permanently delete all saved diagnostic audio corpus files and reclaim disk space. | `voice --purge-corpus` |
 
 ### 2. Text-to-Speech (TTS)
 
@@ -114,14 +118,14 @@ Below is a complete reference of all operational modes and commands you can run 
 
 | Command | Options | Description | Example |
 |---|---|---|---|
-| `voice --report` | `[--format text\|html\|csv\|json]`<br/>`[--output PATH]`<br/>`[--open]`<br/>`[--since TIME]`<br/>`[--last N]`<br/>`[--model NAME]`<br/>`[--device DEV]` | Generate speech transcription latency report. Displays summary card (total runs, median wait, P90, mean RTF) and stage breakdowns (Load, Decode, Finalize, Insert). | `voice --report`<br/>`voice --report --open`<br/>`voice --report --format csv --output report.csv`<br/>`voice --report --since 24h`<br/>`voice --report --last 50` |
+| `voice --report` | `[--format text\|html\|csv\|json]`<br/>`[--output PATH]`<br/>`[--open]`<br/>`[--since TIME]`<br/>`[--last N]`<br/>`[--model NAME]`<br/>`[--device DEV]`<br/>`[--outliers]` | Generate speech transcription latency report. Displays summary card (total runs, median wait, P90, mean RTF, drift %, outlier rate) and stage breakdowns. Use `--outliers` to filter strictly to runs exceeding latency thresholds. | `voice --report`<br/>`voice --report --outliers`<br/>`voice --report --open`<br/>`voice --report --format csv --output report.csv`<br/>`voice --report --since 24h`<br/>`voice --report --last 50` |
 | `voice --metrics` | `[--json]` or `[--json-status]` | Print telemetry ledger summary (file path, disk size, total recorded rows, archives, median wait, P90 latency, mean RTF). Use `--json` for machine-readable output. | `voice --metrics`<br/>`voice --metrics --json` |
 
 ### 4. Diagnostics, Testing & Verification
 
 | Command | Options | Description | Example |
 |---|---|---|---|
-| `voice --doctor` | `[--json]`<br/>`[--export-markdown PATH]` | Run system pre-flight diagnostic probe. Checks external binaries (`wtype`, `wl-clipboard`, `ffmpeg`, etc.), PipeWire/WirePlumber mic volume/mute state, model weights, keybind status, and daemon PIDs. | `voice --doctor`<br/>`voice --doctor --json` |
+| `voice --doctor` | `[--json]`<br/>`[--export-markdown PATH]` | Run system pre-flight diagnostic probe. Inspects external binaries, audio sources, model cache, keybinds, background daemons, CPU vector extensions (AVX2/AVX-512), discrete GPUs, path permissions (0700/0600), free disk space (>1GB), and telemetry diagnostics. | `voice --doctor`<br/>`voice --doctor --json` |
 | `voice --verify` | `[--tier 1\|2\|3\|all]`<br/>`[--json]`<br/>`[--export-markdown PATH]` | Run end-to-end verification suite:<br/>• **Tier 1:** Static binary & permission checks<br/>• **Tier 2:** Automated synthetic audio loopback test (~3.3s)<br/>• **Tier 3:** Interactive window typing matrix<br/>• **all:** Runs all tiers sequentially | `voice --verify`<br/>`voice --verify --tier 2`<br/>`voice --verify --tier 1 --json` |
 | `voice --status` | `[--json-status]` | Print active daemon status (`recording`, `transcribing`, or `idle`). With `--json-status`, prints structured JSON contract. | `voice --status`<br/>`voice --status --json-status` |
 | `voice --test-beep` | — | Test audio cue feedback by sequentially playing start chime, reminder tick, and stop chime. | `voice --test-beep` |
@@ -214,7 +218,11 @@ Every parameter can be passed directly as a command-line flag or defined globall
 |---|---|---|---|
 | `VOICE_METRICS` | Boolean string (`on`/`off`, `1`/`0`) | `on` (enabled) | Primary kill switch for telemetry ledger. Set to `off`, `0`, `false`, or `no` to disable all ledger/status writes. |
 | `VOICE_TELEMETRY` | Boolean string | Consulted if `VOICE_METRICS` is unset | Backward-compatible alias for `VOICE_METRICS`. |
-| `XDG_STATE_HOME` | Directory path | `~/.local/state` | Root directory for persistent telemetry data (`$XDG_STATE_HOME/voicemode/metrics.jsonl`). |
+| `--capture-corpus <mode>` / `VOICEMODE_CORPUS_CAPTURE` | String (`none`, `outliers`, `all`) | `none` | Opt-in diagnostic audio capture mode (0700/0600, bounded to 50 files / 100 MB FIFO). |
+| `--purge-corpus` | Flag | — | Permanently delete all saved diagnostic audio files from disk and reclaim storage. |
+| `VOICEMODE_OUTLIER_RTF_THRESHOLD` | Float $\ge 0.0$ | `1.0` | Real-Time Factor cutoff above which runs are tagged as latency outliers. |
+| `VOICEMODE_OUTLIER_TAIL_S` | Float $\ge 0.0$ seconds | `10.0` | Absolute decode latency ceiling in seconds for outlier detection. |
+| `XDG_STATE_HOME` | Directory path | `~/.local/state` | Root directory for persistent telemetry data (`$XDG_STATE_HOME/voicemode/metrics.jsonl` and `corpus/`). |
 | `XDG_RUNTIME_DIR` | Directory path | `/tmp/voice-stt-$UID` | Ephemeral runtime directory for daemon state (`$XDG_RUNTIME_DIR/voice-stt/status.json`, logs, and PID locks). |
 
 ---
@@ -234,6 +242,11 @@ voice --cancel
 voice --toggle --model small.en
 
 # Paste instead of typing for complex text or web forms:
+voice --toggle --output-method paste
+
+# Opt-in to retain audio only when an outlier latency occurs:
+voice --toggle --capture-corpus outliers
+```
 voice --toggle --output-method paste
 ```
 
@@ -262,6 +275,9 @@ voice --stop-tts
 # View terminal summary report:
 voice --report
 
+# View only outlier runs exceeding real-time thresholds:
+voice --report --outliers
+
 # Open the fluid, dark-mode HTML latency dashboard in your browser:
 voice --report --open
 
@@ -278,11 +294,14 @@ voice --status --json-status
 ### 4. Diagnostics & Recovery
 
 ```bash
-# Run complete system probe:
+# Run complete system probe (hardware, audio, models, daemons, paths, and telemetry):
 voice --doctor
 
 # Run automated synthetic loopback pipeline test:
 voice --verify --tier 2
+
+# Purge saved diagnostic audio files to reclaim disk space:
+voice --purge-corpus
 
 # Kill any orphaned processes and clear stale lock files:
 voice --kill
