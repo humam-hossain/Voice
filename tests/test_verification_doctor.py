@@ -446,5 +446,109 @@ class TestVerificationTiers(unittest.TestCase):
                 self.assertIn("OVERALL STATUS: PASS", fake_stdout.getvalue())
 
 
+class TestHardwareBackendProbe(unittest.TestCase):
+    """Test suite covering guarded hardware backend probing."""
+
+    def test_probe_hardware_backend_cpu_and_cuda_mocked(self) -> None:
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("shutil.which", return_value="/usr/bin/nvidia-smi"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="NVIDIA GeForce RTX 3060\n")
+            hw = voice.probe_hardware_backend()
+            self.assertEqual(hw["cuda_devices"], 1)
+            self.assertEqual(hw["cuda_name"], "NVIDIA GeForce RTX 3060")
+            self.assertEqual(hw["default_backend"], "cpu, int8")
+
+    def test_probe_hardware_backend_nvidia_smi_timeout(self) -> None:
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("shutil.which", return_value="/usr/bin/nvidia-smi"), \
+             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["nvidia-smi"], timeout=1.0)):
+            hw = voice.probe_hardware_backend()
+            self.assertEqual(hw["cuda_devices"], 1)
+            self.assertIn("timed out", hw["cuda_name"])
+            self.assertEqual(hw["default_backend"], "cpu, int8")
+
+    def test_probe_hardware_backend_cpu_flags_mocked(self) -> None:
+        fake_cpuinfo = "processor\t: 0\nflags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt intel_pt avx512f avx512dq\n"
+        with patch("builtins.open", unittest.mock.mock_open(read_data=fake_cpuinfo)):
+            hw = voice.probe_hardware_backend()
+            self.assertTrue(hw["avx2"])
+            self.assertTrue(hw["avx512"])
+
+    def test_probe_hardware_backend_no_model_loading(self) -> None:
+        with patch("faster_whisper.WhisperModel") as mock_model:
+            hw = voice.probe_hardware_backend()
+            mock_model.assert_not_called()
+            self.assertEqual(hw["default_backend"], "cpu, int8")
+
+
+class TestDoctorTelemetryAndPaths(unittest.TestCase):
+    """Test suite covering doctor telemetry card, path permissions, and JSON contracts."""
+
+    def test_run_doctor_json_contains_telemetry_and_hardware(self) -> None:
+        args = voice.parse_args(["--doctor", "--json"])
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            ret = voice.run_doctor(args)
+            self.assertEqual(ret, 0)
+            data = json.loads(mock_out.getvalue())
+            self.assertIn("telemetry", data)
+            self.assertIn("hardware", data)
+            self.assertIn("paths", data)
+            self.assertEqual(data["hardware"]["default_backend"], "cpu, int8")
+            self.assertIn("runtime_dir", data["paths"])
+            self.assertIn("state_dir", data["paths"])
+            self.assertIn("corpus_dir", data["paths"])
+            self.assertIn("metrics_ledger", data["paths"])
+
+    def test_check_paths_and_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_p = Path(tmp_dir)
+            rt_dir = tmp_p / "runtime"
+            st_dir = tmp_p / "state"
+            cp_dir = tmp_p / "corpus"
+            ledger = st_dir / "metrics.jsonl"
+            rt_dir.mkdir(mode=0o700)
+            st_dir.mkdir(mode=0o700)
+            cp_dir.mkdir(mode=0o700)
+            ledger.write_text("{}\n", encoding="utf-8")
+            os.chmod(ledger, 0o600)
+
+            with patch("voicemode_telemetry.get_runtime_dir", return_value=rt_dir), \
+                 patch("voicemode_telemetry.get_metrics_dir", return_value=st_dir), \
+                 patch("voicemode_telemetry.get_corpus_dir", return_value=cp_dir), \
+                 patch("voicemode_telemetry.get_ledger_path", return_value=ledger), \
+                 patch("shutil.disk_usage", return_value=MagicMock(free=10 * 1024**3)):
+                ok, paths_data = voice.check_paths_and_permissions()
+                self.assertTrue(ok)
+                self.assertTrue(paths_data["runtime_dir"]["ok"])
+                self.assertTrue(paths_data["state_dir"]["ok"])
+                self.assertTrue(paths_data["corpus_dir"]["ok"])
+                self.assertTrue(paths_data["metrics_ledger"]["ok"])
+                self.assertTrue(paths_data["disk_space"]["ok"])
+
+    def test_doctor_exit_codes_advisory_vs_fatal(self) -> None:
+        # Fatal break (missing wtype) -> exit code 1
+        args = voice.parse_args(["--doctor"])
+        with patch("voice.check_binary", side_effect=lambda name, hint: (False, "missing", hint) if name == "wtype" else (True, f"/bin/{name}", "")), \
+             patch("voice.check_audio_source_status", return_value=(True, "Active", "")), \
+             patch("voice.check_models_status", return_value=[]), \
+             patch("voice.check_hyprland_keybinds_status", return_value=(True, "Verified", "")), \
+             patch("voice.check_daemon_pid_health", return_value=[]), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            ret = voice.run_doctor(args)
+            self.assertEqual(ret, 1)
+
+        # Advisory warning (muted mic + invalid permissions) -> exit code 0
+        with patch("voice.check_binary", return_value=(True, "/bin/ok", "")), \
+             patch("voice.check_audio_source_status", return_value=(False, "Volume: 0.50 [MUTED]", "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0")), \
+             patch("voice.check_models_status", return_value=[]), \
+             patch("voice.check_hyprland_keybinds_status", return_value=(True, "Verified", "")), \
+             patch("voice.check_daemon_pid_health", return_value=[]), \
+             patch("voice.check_paths_and_permissions", return_value=(False, {"runtime_dir": {"ok": False, "mode": "0o777"}})), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            ret = voice.run_doctor(args)
+            self.assertEqual(ret, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

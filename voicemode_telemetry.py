@@ -34,6 +34,9 @@ def get_state_dir() -> Path:
     return state_dir
 
 
+get_runtime_dir = get_state_dir
+
+
 def get_metrics_dir() -> Path:
     xdg_state_home = os.getenv("XDG_STATE_HOME", "~/.local/state")
     metrics_dir = Path(xdg_state_home).expanduser() / "voicemode"

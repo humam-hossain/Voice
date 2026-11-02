@@ -1262,7 +1262,15 @@ def handle_report_command(args: argparse.Namespace) -> int:
             model_filter = getattr(args, "model", None)
             device_filter = getattr(args, "device", None)
 
-        filtered = filter_records(records, since=since, last=last, model=model_filter, device=device_filter)
+        outliers_filter = bool(getattr(args, "outliers", False))
+        filtered = filter_records(
+            records,
+            since=since,
+            last=last,
+            model=model_filter,
+            device=device_filter,
+            outliers=outliers_filter,
+        )
         metrics = compute_report_metrics(filtered)
 
         fmt = _infer_format(args)

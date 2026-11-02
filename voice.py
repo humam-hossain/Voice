@@ -3225,6 +3225,121 @@ def kill_all_daemons(args: argparse.Namespace) -> int:
     return 0
 
 
+def probe_hardware_backend() -> dict:
+    """Probes CPU vector extensions and discrete GPU backends safely without loading Whisper."""
+    import platform
+
+    result = {
+        "arch": platform.machine(),
+        "avx2": False,
+        "avx512": False,
+        "cuda_devices": 0,
+        "cuda_name": None,
+        "rocm": False,
+        "intel_gpu": False,
+        "default_backend": "cpu, int8",
+    }
+    # 1. CPU Vector Extensions via /proc/cpuinfo
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    flags = set(line.split())
+                    result["avx2"] = "avx2" in flags
+                    result["avx512"] = any(f.startswith("avx512") for f in flags)
+                    break
+    except Exception:
+        pass
+
+    # 2. CUDA Device Count (ctranslate2 query without model init)
+    try:
+        import ctranslate2
+        result["cuda_devices"] = ctranslate2.get_cuda_device_count()
+        if result["cuda_devices"] > 0 and shutil.which("nvidia-smi"):
+            try:
+                proc = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                    capture_output=True, text=True, timeout=1.0, check=False
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    result["cuda_name"] = proc.stdout.strip().splitlines()[0]
+            except (subprocess.TimeoutExpired, Exception):
+                result["cuda_name"] = "NVIDIA GPU (query timed out)"
+    except Exception:
+        result["cuda_devices"] = 0
+
+    # 3. ROCm & Intel check
+    result["rocm"] = os.path.exists("/dev/kfd")
+    result["intel_gpu"] = os.path.exists("/dev/dri")
+    return result
+
+
+def check_paths_and_permissions() -> tuple[bool, dict]:
+    """Audits runtime, state, corpus directories (0700), ledger file (0600), and disk space (>1GB)."""
+    rt_dir = voicemode_telemetry.get_runtime_dir()
+    st_dir = voicemode_telemetry.get_metrics_dir()
+    cp_dir = voicemode_telemetry.get_corpus_dir()
+    ledger_p = voicemode_telemetry.get_ledger_path()
+
+    def _check_perm(p: Path, expected_oct: int) -> dict:
+        if not p.exists():
+            return {
+                "path": str(p),
+                "exists": False,
+                "mode": None,
+                "expected": oct(expected_oct),
+                "ok": True,
+                "status": "not_created",
+            }
+        st = p.stat()
+        mode_val = st.st_mode & 0o777
+        mode_oct = oct(mode_val)
+        is_ok = mode_val == expected_oct
+        return {
+            "path": str(p),
+            "exists": True,
+            "mode": mode_oct,
+            "expected": oct(expected_oct),
+            "ok": is_ok,
+            "status": "ok" if is_ok else "invalid_permissions",
+        }
+
+    rt_info = _check_perm(rt_dir, 0o700)
+    st_info = _check_perm(st_dir, 0o700)
+    cp_info = _check_perm(cp_dir, 0o700)
+    lg_info = _check_perm(ledger_p, 0o600)
+
+    free_gb = 0.0
+    disk_ok = True
+    try:
+        target_dir = st_dir if st_dir.exists() else Path.home()
+        usage = shutil.disk_usage(target_dir)
+        free_gb = round(usage.free / (1024**3), 2)
+        disk_ok = usage.free >= 1024**3
+    except Exception:
+        pass
+
+    disk_info = {
+        "path": str(st_dir),
+        "free_gb": free_gb,
+        "required_gb": 1.0,
+        "ok": disk_ok,
+        "status": "ok" if disk_ok else "low_disk_space",
+    }
+
+    all_ok = rt_info["ok"] and st_info["ok"] and cp_info["ok"] and lg_info["ok"] and disk_ok
+
+    paths_data = {
+        "runtime_dir": rt_info,
+        "state_dir": st_info,
+        "corpus_dir": cp_info,
+        "metrics_ledger": lg_info,
+        "disk_space": disk_info,
+        "ok": all_ok,
+    }
+    return all_ok, paths_data
+
+
 def run_doctor(args: argparse.Namespace) -> int:
     """Run system pre-flight diagnostic probe."""
     import json as json_lib
@@ -3277,6 +3392,22 @@ def run_doctor(args: argparse.Namespace) -> int:
         if not d_ok:
             critical_failures += 1
 
+    hw_info = probe_hardware_backend()
+    paths_ok, paths_data = check_paths_and_permissions()
+
+    # Telemetry Diagnostics (D-22, D-33, D-35)
+    telemetry_metrics = {}
+    try:
+        import voicemode_report
+        records, skipped = voicemode_report.load_ledger_records()
+        telemetry_metrics = voicemode_report.compute_report_metrics(records)
+        st_dir = voicemode_telemetry.get_state_dir()
+        report_html_path = st_dir / "report.html"
+        if not report_html_path.exists():
+            voicemode_report.generate_prerendered_report(report_html_path)
+    except Exception as e:
+        telemetry_metrics = {"error": str(e), "total_runs": 0}
+
     overall_ok = critical_failures == 0
 
     if getattr(args, "json", False) or getattr(args, "json_verify", False):
@@ -3288,6 +3419,9 @@ def run_doctor(args: argparse.Namespace) -> int:
             "models": model_results,
             "keybinds": kb_result,
             "daemons": daemon_results,
+            "hardware": hw_info,
+            "paths": paths_data,
+            "telemetry": telemetry_metrics,
         }
         print(json_lib.dumps(report, indent=2))
         return 0 if overall_ok else 1
@@ -3329,10 +3463,64 @@ def run_doctor(args: argparse.Namespace) -> int:
         if not d["ok"]:
             print(f"         Remediation: {d['remediation']}")
 
+    print("\n[6. Hardware Acceleration Backend]")
+    print(f"  CPU Architecture:    {hw_info['arch']}")
+    avx2_str = "[PASS]" if hw_info["avx2"] else "[WARN]"
+    avx512_str = "[PASS]" if hw_info["avx512"] else "[INFO]"
+    print(f"  Vector Extensions:   AVX2: {avx2_str}, AVX-512: {avx512_str}")
+    if hw_info["cuda_name"]:
+        gpu_str = f"{hw_info['cuda_name']} ({hw_info['cuda_devices']} device(s))"
+    elif hw_info["cuda_devices"] > 0:
+        gpu_str = f"CUDA ({hw_info['cuda_devices']} device(s))"
+    else:
+        gpu_str = "None detected"
+    print(f"  Discrete GPUs:       {gpu_str}")
+    rocm_str = "detected" if hw_info["rocm"] else "none"
+    dri_str = "detected" if hw_info["intel_gpu"] else "none"
+    print(f"  ROCm / DRI:          ROCm: {rocm_str}, DRI: {dri_str}")
+    print(f"  Default STT Backend: {hw_info['default_backend']} (strictly enforced)")
+
+    print("\n[7. Paths, Storage & Permissions]")
+    for key, label in [
+        ("runtime_dir", "Runtime Dir"),
+        ("state_dir", "State Dir"),
+        ("corpus_dir", "Corpus Dir"),
+        ("metrics_ledger", "Metrics File"),
+    ]:
+        item = paths_data.get(key, {})
+        tag = "[PASS]" if item.get("ok") else "[WARN]"
+        m = item.get("mode") or "missing"
+        print(f"  {tag:<6} {label:<14} {item.get('path', '')} ({m})")
+    disk = paths_data.get("disk_space", {})
+    d_tag = "[PASS]" if disk.get("ok") else "[WARN]"
+    print(f"  {d_tag:<6} {'Free Space':<14} {disk.get('free_gb', 0.0)} GB free (>= 1.0 GB required)")
+
+    print("\n[8. Telemetry & Performance Diagnostics]")
+    tot_runs = telemetry_metrics.get("total_runs", 0)
+    if tot_runs == 0:
+        print("  Telemetry: ready (0 runs recorded). Establish performance baseline by recording with SUPER+SHIFT+M")
+    else:
+        print(f"  Runs Recorded:       {tot_runs}")
+        med_w = telemetry_metrics.get("median_wait_s")
+        p90_w = telemetry_metrics.get("p90_latency_s")
+        print(f"  Median Wait Latency: {med_w}s (p90: {p90_w}s)" if med_w is not None else "  Median Wait Latency: N/A")
+        mean_rtf = telemetry_metrics.get("mean_rtf")
+        print(f"  Mean RTF:            {mean_rtf}" if mean_rtf is not None else "  Mean RTF:            N/A")
+        out_cnt = telemetry_metrics.get("outlier_count", 0)
+        out_rate = telemetry_metrics.get("outlier_rate", 0.0)
+        print(f"  Outliers:            {out_cnt} ({out_rate * 100:.1f}%)")
+        drift = telemetry_metrics.get("drift_pct")
+        drift_str = f"{drift:+.1f}% vs lifetime baseline" if drift is not None else "N/A (< 5 runs)"
+        print(f"  Drift:               {drift_str}")
+        last_run = telemetry_metrics.get("last_run_timestamp") or "N/A"
+        print(f"  Last Run:            {last_run}")
+
     print("\n" + "=" * 66)
     if overall_ok:
         if "[MUTED]" in audio_details:
             print("DIAGNOSTIC STATUS: READY WITH WARNING (Mic currently muted)")
+        elif not paths_ok:
+            print("DIAGNOSTIC STATUS: READY WITH WARNING (Path/storage advisory)")
         else:
             print("DIAGNOSTIC STATUS: ALL CHECKS PASSED (System Healthy)")
     else:
@@ -3893,6 +4081,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--open", action="store_true", help="Open HTML report in default browser via xdg-open.")
     parser.add_argument("--since", metavar="TIME", help="Filter report runs since ISO date or relative duration (e.g. 24h, 7d).")
     parser.add_argument("--last", metavar="N", default=None, help="Filter report to last N runs or 'all' (default: 200).")
+    parser.add_argument("--outliers", action="store_true", help="Filter report strictly to outlier runs.")
     parser.add_argument(
         "--install-hotkey",
         action="store_true",
