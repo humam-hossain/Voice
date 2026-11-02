@@ -21,10 +21,15 @@ STATUS_FILENAME = "status.json"
 
 
 def get_state_dir() -> Path:
-    xdg_runtime_dir = os.getenv("XDG_RUNTIME_DIR", f"/tmp/voice-stt-{os.getuid()}")
+    xdg_runtime_dir = os.getenv("XDG_RUNTIME_DIR")
+    if not xdg_runtime_dir:
+        xdg_runtime_dir = f"/tmp/voice-stt-{os.getuid()}"
     state_dir = Path(xdg_runtime_dir) / "voice-stt"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(state_dir, 0o700)
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(state_dir, 0o700)
+    except OSError:
+        pass
     return state_dir
 
 
@@ -366,12 +371,19 @@ def append_ledger_row(record: dict) -> bool:
     except Exception:
         pass
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=True, sort_keys=True) + "\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(fd, line.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        import errno
+        if e.errno in (errno.ENOSPC, errno.EROFS, errno.EACCES):
+            print(f"telemetry append skipped ({e})", file=__import__('sys').stderr)
+            return False
+        raise
     return True
 
 
@@ -385,6 +397,12 @@ def publish_status(status: dict) -> bool:
         validate_status(status_to_write)
         atomic_write_json(get_state_dir() / STATUS_FILENAME, status_to_write, 0o600)
         return True
+    except OSError as e:
+        import errno
+        if e.errno in (errno.ENOSPC, errno.EROFS, errno.EACCES):
+            print(f"telemetry status publish skipped ({e})", file=__import__('sys').stderr)
+            return False
+        raise
     except Exception:
         raise
 

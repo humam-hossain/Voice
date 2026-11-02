@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import numpy as np
+
 import voicemode_telemetry
 
 CTRL_B = "\x02"
@@ -189,28 +191,33 @@ class Recorder:
         with self._lock:
             return self._chunk_audio_s.get(idx)
 
-    def _write_chunk_file(self, audio, idx: int, save_dir: Optional[Path]) -> tuple[Path, float]:
+    def _write_chunk_file(self, audio, idx: int, save_dir: Optional[Path]) -> tuple[Path | np.ndarray, float]:
         import numpy as np
         audio_s = round(len(audio) / float(self.actual_sample_rate or self.target_sample_rate), 3)
         if self.actual_sample_rate != self.target_sample_rate:
             audio = resample_pcm(audio, self.actual_sample_rate, self.target_sample_rate)
         pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
 
-        if save_dir:
-            save_dir.mkdir(parents=True, exist_ok=True)
-            wav_path = save_dir / f"voice-{self._session_id}-seg{idx:02d}.wav"
-        else:
-            temp = tempfile.NamedTemporaryFile(prefix=f"voice-{self._session_id}-seg{idx:02d}-", suffix=".wav", delete=False)
-            wav_path = Path(temp.name)
-            temp.close()
+        try:
+            if save_dir:
+                save_dir.mkdir(parents=True, exist_ok=True)
+                wav_path = save_dir / f"voice-{self._session_id}-seg{idx:02d}.wav"
+            else:
+                temp = tempfile.NamedTemporaryFile(prefix=f"voice-{self._session_id}-seg{idx:02d}-", suffix=".wav", delete=False)
+                wav_path = Path(temp.name)
+                temp.close()
 
-        with wave.open(str(wav_path), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(self.target_sample_rate)
-            wav.writeframes(pcm.tobytes())
+            with wave.open(str(wav_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(self.target_sample_rate)
+                wav.writeframes(pcm.tobytes())
 
-        return wav_path, audio_s
+            return wav_path, audio_s
+        except OSError:
+            # D-30: Fall back to in-memory float32 numpy array on disk errors (ENOSPC etc.)
+            audio_float = np.clip(audio.flatten(), -1.0, 1.0).astype(np.float32)
+            return audio_float, audio_s
 
     def _write_chunk_async(self, audio: np.ndarray, idx: int, save_dir: Optional[Path]) -> None:
         try:
@@ -673,12 +680,15 @@ def load_model(args: argparse.Namespace, *, force_cpu: bool = False) -> ModelSta
 
     device = "cpu" if force_cpu else args.device
     compute_type = "int8" if force_cpu and args.compute_type == "auto" else args.compute_type
+    # D-32: Clamp CPU inference threads to protect low-RAM systems
+    cpu_threads = min(4, os.cpu_count() or 4)
     print(f"Loading faster-whisper {args.model!r} on {device} ({compute_type})...", flush=True)
     model = WhisperModel(
         args.model,
         device=device,
         compute_type=compute_type,
         local_files_only=not args.allow_download,
+        cpu_threads=cpu_threads,
     )
     state = ModelState(model=model, requested_device=device, requested_compute_type=compute_type)
     print(f"Ready: {actual_backend(model)}", flush=True)
@@ -705,13 +715,15 @@ class TranscriptionEvidence:
 
 def transcribe_timed(
     model_state: ModelState,
-    wav_path: Path,
+    wav_path: Path | str | np.ndarray,
     args: argparse.Namespace,
     *,
     initial_prompt: Optional[str] = None,
     audio_s: Optional[float] = None,
     on_segment_yield: Optional[Callable[[float, float, float], None]] = None,
 ) -> TranscriptionEvidence:
+    import numpy as np
+
     kwargs: dict[str, Any] = {
         "beam_size": getattr(args, "beam_size", 5),
         "vad_filter": getattr(args, "vad_filter", True),
@@ -721,9 +733,15 @@ def transcribe_timed(
     if initial_prompt:
         kwargs["initial_prompt"] = initial_prompt
 
+    # Resolve the audio_input: either a file path string or a numpy array
+    if isinstance(wav_path, np.ndarray):
+        audio_input = wav_path
+    else:
+        audio_input = str(wav_path)
+
     def _decode(state: ModelState):
         t0 = time.monotonic()
-        raw_segments, info = state.model.transcribe(str(wav_path), **kwargs)
+        raw_segments, info = state.model.transcribe(audio_input, **kwargs)
         segments = []
         decoded_audio_s = 0.0
         total_audio = audio_s
@@ -1272,6 +1290,9 @@ def finalize_background_run(
     finally:
         if lock:
             lock.release()
+        # D-32: Release resident pages on finalization
+        import gc
+        gc.collect()
 
 
 def reconcile_abandoned_run() -> bool:
