@@ -124,7 +124,7 @@ StyledPopup {
     property string modelDownloadFeedback: ""
     property bool modelDownloadSuccess: true
 
-    Process {
+    readonly property Process checkModelsProc: Process {
         id: checkModelsProc
         command: [root.voiceBin, "--models-info", "--json"]
         stdout: StdioCollector {
@@ -146,7 +146,7 @@ StyledPopup {
         }
     }
 
-    Process {
+    readonly property Process downloadModelProc: Process {
         id: downloadModelProc
         property string targetModel: ""
         command: [root.voiceBin, "--download-model", targetModel]
