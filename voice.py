@@ -3167,6 +3167,172 @@ def check_audio_source_status() -> tuple[bool, str, str]:
         return False, f"Audio check error: {e}", "Verify PipeWire/WirePlumber services"
 
 
+
+WHISPER_MODELS_METADATA: dict[str, dict[str, str]] = {
+    "tiny": {"params": "39M", "disk": "~75 MB", "ram": "~390 MB", "description": "Fastest STT, lowest resource footprint"},
+    "tiny.en": {"params": "39M", "disk": "~75 MB", "ram": "~390 MB", "description": "Fastest English-only STT"},
+    "base": {"params": "74M", "disk": "~145 MB", "ram": "~500 MB", "description": "Fast multilingual STT, good general accuracy"},
+    "base.en": {"params": "74M", "disk": "~145 MB", "ram": "~500 MB", "description": "Fast English STT, solid balance of speed & quality"},
+    "small": {"params": "244M", "disk": "~480 MB", "ram": "~1.0 GB", "description": "High accuracy multilingual model"},
+    "small.en": {"params": "244M", "disk": "~480 MB", "ram": "~1.0 GB", "description": "High accuracy English dictation"},
+    "medium": {"params": "769M", "disk": "~1.5 GB", "ram": "~2.6 GB", "description": "Near human-level multilingual accuracy"},
+    "medium.en": {"params": "769M", "disk": "~1.5 GB", "ram": "~2.6 GB", "description": "Production English dictation benchmark"},
+    "large-v2": {"params": "1550M", "disk": "~3.1 GB", "ram": "~4.7 GB", "description": "High-capacity legacy Whisper model"},
+    "large-v3": {"params": "1550M", "disk": "~3.1 GB", "ram": "~4.7 GB", "description": "Maximum accuracy across complex accents & noisy audio"},
+    "large-v3-turbo": {"params": "809M", "disk": "~1.6 GB", "ram": "~2.8 GB", "description": "Optimized high accuracy with 8x faster decoding speed"},
+}
+
+TTS_BACKENDS_METADATA: dict[str, dict[str, str]] = {
+    "kokoro": {
+        "name": "Kokoro (Local Neural ONNX)",
+        "params": "82M",
+        "disk": "338 MB",
+        "ram": "~500 MB",
+        "description": "Local offline neural TTS, high naturalness",
+    },
+    "edge": {
+        "name": "Microsoft Edge Cloud",
+        "params": "Cloud API",
+        "disk": "0 MB",
+        "ram": "0 MB",
+        "description": "Online streaming TTS, zero local RAM usage",
+    },
+}
+
+
+def is_whisper_model_cached(stt_model: str, hf_hub_dir: Path | None = None) -> bool:
+    """Return whether the specified Faster-Whisper model is present in Hugging Face cache."""
+    cache_dir = hf_hub_dir if hf_hub_dir is not None else (Path.home() / ".cache" / "huggingface" / "hub")
+    if not cache_dir.exists():
+        return False
+    # Check known repo mapping if available
+    try:
+        from faster_whisper.utils import _MODELS
+        repo_id = _MODELS.get(stt_model)
+        if repo_id:
+            target_name = f"models--{repo_id.replace('/', '--')}"
+            target_path = cache_dir / target_name
+            if target_path.is_dir():
+                sn = target_path / "snapshots"
+                if not sn.exists() or (sn.is_dir() and any(sn.iterdir())):
+                    return True
+    except Exception:
+        pass
+    # Pattern match across hub directory
+    for d in cache_dir.iterdir():
+        if d.is_dir() and (f"faster-whisper-{stt_model}" in d.name):
+            sn = d / "snapshots"
+            if not sn.exists() or (sn.is_dir() and any(sn.iterdir())):
+                return True
+    return False
+
+
+def get_models_metadata(
+    kokoro_model: Path | None = None,
+    kokoro_voices: Path | None = None,
+) -> dict[str, Any]:
+    """Compile structured metadata of supported STT and TTS models with cache status."""
+    stt_list = []
+    for model_id, meta in WHISPER_MODELS_METADATA.items():
+        stt_list.append({
+            "id": model_id,
+            "params": meta["params"],
+            "disk": meta["disk"],
+            "ram": meta["ram"],
+            "description": meta["description"],
+            "cached": is_whisper_model_cached(model_id),
+        })
+
+    k_model = kokoro_model or default_kokoro_model_path()
+    k_voices = kokoro_voices or default_kokoro_voices_path()
+    kokoro_cached = False
+    if k_model.exists() and k_voices.exists():
+        try:
+            if k_model.stat().st_size >= 300_000_000 and k_voices.stat().st_size >= 20_000_000:
+                kokoro_cached = True
+        except OSError:
+            pass
+
+    tts_list = [
+        {
+            "id": "kokoro",
+            "name": TTS_BACKENDS_METADATA["kokoro"]["name"],
+            "params": TTS_BACKENDS_METADATA["kokoro"]["params"],
+            "disk": TTS_BACKENDS_METADATA["kokoro"]["disk"],
+            "ram": TTS_BACKENDS_METADATA["kokoro"]["ram"],
+            "description": TTS_BACKENDS_METADATA["kokoro"]["description"],
+            "cached": kokoro_cached,
+        },
+        {
+            "id": "edge",
+            "name": TTS_BACKENDS_METADATA["edge"]["name"],
+            "params": TTS_BACKENDS_METADATA["edge"]["params"],
+            "disk": TTS_BACKENDS_METADATA["edge"]["disk"],
+            "ram": TTS_BACKENDS_METADATA["edge"]["ram"],
+            "description": TTS_BACKENDS_METADATA["edge"]["description"],
+            "cached": True,
+        },
+    ]
+
+    return {
+        "stt_models": stt_list,
+        "tts_backends": tts_list,
+    }
+
+
+def download_whisper_model(model_name: str | None, args: argparse.Namespace) -> int:
+    """Download and cache a Faster-Whisper model into the Hugging Face hub cache."""
+    resolved_model = (model_name or getattr(args, "model", "medium.en") or "medium.en").strip()
+    if not resolved_model:
+        resolved_model = "medium.en"
+    print(f"Checking and downloading Faster-Whisper model '{resolved_model}'...", flush=True)
+    try:
+        from faster_whisper import download_model
+        path = download_model(resolved_model, local_files_only=False)
+        print(f"Success: Faster-Whisper model '{resolved_model}' is ready at {path}", flush=True)
+        return 0
+    except Exception as exc:
+        print(f"Error downloading Faster-Whisper model '{resolved_model}': {exc}", file=sys.stderr, flush=True)
+        return 1
+
+
+def print_models_info(args: argparse.Namespace) -> int:
+    """Display model metadata and status in human-readable or JSON format."""
+    import json
+    data = get_models_metadata(
+        kokoro_model=getattr(args, "kokoro_model", None),
+        kokoro_voices=getattr(args, "kokoro_voices", None),
+    )
+    is_json = bool(
+        getattr(args, "json_status", False)
+        or getattr(args, "json_verify", False)
+        or getattr(args, "json", False)
+        or getattr(args, "format", "") == "json"
+    )
+    if is_json:
+        print(json.dumps(data, indent=2))
+        return 0
+
+    print("==================================================================")
+    print("                    VOICEMODE MODEL SPECIFICATIONS                ")
+    print("==================================================================")
+    print("\n[Speech-to-Text (Faster-Whisper)]")
+    print(f"  {'Model':<16} {'Params':<8} {'Disk':<10} {'RAM/VRAM':<10} {'Status'}")
+    print("  " + "-" * 60)
+    for m in data["stt_models"]:
+        st = "Cached [Ready]" if m["cached"] else "Not Cached"
+        print(f"  {m['id']:<16} {m['params']:<8} {m['disk']:<10} {m['ram']:<10} {st}")
+
+    print("\n[Text-to-Speech Backends]")
+    print(f"  {'Backend':<10} {'Params':<10} {'Disk':<10} {'RAM/VRAM':<10} {'Status'}")
+    print("  " + "-" * 60)
+    for b in data["tts_backends"]:
+        st = "Verified [Ready]" if b["cached"] else "Missing Assets"
+        print(f"  {b['id']:<10} {b['params']:<10} {b['disk']:<10} {b['ram']:<10} {st}")
+    print("==================================================================")
+    return 0
+
+
 def check_models_status(
     stt_model: str = "small.en",
     kokoro_model: Path | None = None,
@@ -3184,6 +3350,10 @@ def check_models_status(
                 whisper_match = True
                 details = f"Cached in ~/.cache/huggingface/hub/{d.name}"
                 break
+        if not whisper_match and is_whisper_model_cached(stt_model, hf_hub_dir):
+            whisper_match = True
+            details = f"Cached in ~/.cache/huggingface/hub (Faster-Whisper {stt_model})"
+
     if whisper_match:
         results.append((f"Faster-Whisper ({stt_model})", True, details, ""))
     else:
@@ -3191,7 +3361,7 @@ def check_models_status(
             f"Faster-Whisper ({stt_model})",
             False,
             "Missing in local HuggingFace cache",
-            "Run: voice --check --allow-download",
+            f"Run: voice --download-model {stt_model}",
         ))
 
     k_model = kokoro_model or default_kokoro_model_path()
@@ -4214,6 +4384,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Audio chunk duration in seconds (default: 180.0 / 3 minutes).",
     )
     parser.add_argument("--allow-download", action="store_true", help="Allow faster-whisper to download a missing model.")
+    parser.add_argument(
+        "--download-model",
+        nargs="?",
+        const="",
+        metavar="MODEL",
+        help="Download and verify a Faster-Whisper model into the Hugging Face cache (defaults to configured model).",
+    )
+    parser.add_argument(
+        "--models-info",
+        action="store_true",
+        help="Print supported STT and TTS models with parameters, size, RAM usage, and cache status.",
+    )
     parser.add_argument("--list-devices", action="store_true", help="Print sounddevice devices and exit.")
     parser.add_argument("--check", action="store_true", help="Load the model and print the selected backend, then exit.")
     parser.add_argument("--toggle", action="store_true", help="Toggle background recording; stop transcribes and inserts text.")
@@ -4420,6 +4602,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"Error generating report: {exc}", file=sys.stderr)
             return 1
+
+    if getattr(args, "download_model", None) is not None:
+        return download_whisper_model(args.download_model, args)
+    if getattr(args, "models_info", False):
+        return print_models_info(args)
 
     if args.download_tts_assets:
         return download_tts_assets(args)
