@@ -177,6 +177,10 @@ Plans:
   2. Integrated cleanly into Quickshell panel families and themed consistently with Material You tokens.
 
 **Plans**: TBD
+
+- [x] 11-01-PLAN.md
+- [ ] 11-02-PLAN.md
+
 **UI hint**: yes
 
 ## Progress
@@ -196,4 +200,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
 | 9. Quickshell Status Pill Integration | v1.1 | 4/4 | Complete    | 2026-11-02 |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 3/3 | Complete    | 2026-11-02 |
-| 11. Voice Desktop Pop-up UI | v1.2 | 0/0 | Not started | - |
+| 11. Voice Desktop Pop-up UI | v1.2 | 1/2 | In Progress|  |
