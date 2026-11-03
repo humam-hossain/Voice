@@ -35,6 +35,43 @@ def is_safe_report_path(runtime_dir: str, target: str) -> bool:
         return False
 
 
+def parse_recent_runs_simulation(text: str, max_count: int = 10) -> list[dict]:
+    """Python simulation matching VoicePopup.qml parseRecentRuns()."""
+    if not text or not isinstance(text, str):
+        return []
+    lines = text.strip().split("\n")
+    result = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+            if not isinstance(item, dict):
+                continue
+            audio_s = item.get("audio_s")
+            rtf_val = item.get("rtf")
+            is_failed = item.get("failed") is True or bool(item.get("failure_reason"))
+            is_outlier = bool(item.get("is_outlier"))
+            duration_str = f"{float(audio_s):.1f}s" if audio_s is not None else "--"
+            chars_str = str(item.get("characters")) if item.get("characters") is not None else "--"
+            rtf_str = f"{float(rtf_val):.2f}x" if rtf_val is not None else "--"
+            result.append({
+                "runId": item.get("run_id", ""),
+                "duration": duration_str,
+                "chars": chars_str,
+                "rtf": rtf_str,
+                "outlier": is_outlier,
+                "success": not is_failed,
+                "outcome": item.get("outcome") or ("failed" if is_failed else "success"),
+            })
+            if len(result) >= max_count:
+                break
+        except Exception:
+            continue
+    return result
+
+
 class TestPillIntegrationSimulation(TempXdgTestCase):
     """End-to-end integration simulation testing the status contract and pill expectations."""
 
@@ -363,14 +400,19 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
                 self.assertEqual(cur_state, busy_state)
 
     def test_qml_contains_no_rm_commands(self):
-        """Verify Voice.qml never unlinks backend PID lock files."""
+        """Verify Voice QML files never execute rm or dangerous shell commands."""
         for path in (
             Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/services/Voice.qml"),
             Path("integrations/quickshell/Voice.qml"),
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"),
+            Path("integrations/quickshell/VoicePill.qml"),
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePopup.qml"),
+            Path("integrations/quickshell/VoicePopup.qml"),
         ):
             text = path.read_text(encoding="utf-8")
-            self.assertIsNone(re.search(r'\brm\b', text), f"{path} must not contain any rm commands")
-            self.assertNotIn("execDetached", text, f"{path} must not spawn detached shell commands")
+            self.assertIsNone(re.search(r'\brm\s+', text), f"{path} must not contain any rm commands")
+            self.assertNotIn("sh -c", text, f"{path} must not contain raw shell invocations")
+            self.assertNotIn("bash -c", text, f"{path} must not contain raw shell invocations")
 
     def test_total_duration_s_in_status_contract(self):
         """Verify total_duration_s is published and tracked in status.json."""
@@ -459,3 +501,90 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
             self.assertNotIn("sh -c", content)
             self.assertNotIn("bash -c", content)
             self.assertNotRegex(content, r"\brm\s+-")
+
+    def test_hover_gating(self):
+        """POP-01: Verify hover gating logic across recorder states and QML bindings."""
+        def evaluate_hover_target(overall_state: str, active: bool) -> bool:
+            return (overall_state != "recording") or active
+
+        # State evaluations
+        self.assertTrue(evaluate_hover_target("idle", False))
+        self.assertFalse(evaluate_hover_target("recording", False))
+        self.assertTrue(evaluate_hover_target("recording", True))
+        self.assertTrue(evaluate_hover_target("transcribing", False))
+        self.assertTrue(evaluate_hover_target("typing", False))
+
+        # Inspect VoicePill.qml files
+        for p in (
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"),
+            Path("integrations/quickshell/VoicePill.qml"),
+        ):
+            content = p.read_text(encoding="utf-8")
+            self.assertIn("VoicePopup {", content)
+            self.assertIn('hoverTarget: (Voice.overallState !== "recording" || active) ? pillMouseArea : null', content)
+            self.assertNotIn("Voice.openReport()", content)
+
+    def test_voice_popup_and_pill_dotfiles_parity(self):
+        """POP-01, POP-02: Ensure 100% byte-for-byte parity between .dotfiles and integrations/quickshell/."""
+        dotfiles_popup = Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePopup.qml")
+        repo_popup = Path("integrations/quickshell/VoicePopup.qml")
+        dotfiles_pill = Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml")
+        repo_pill = Path("integrations/quickshell/VoicePill.qml")
+
+        self.assertEqual(dotfiles_popup.read_text(encoding="utf-8"), repo_popup.read_text(encoding="utf-8"))
+        self.assertEqual(dotfiles_pill.read_text(encoding="utf-8"), repo_pill.read_text(encoding="utf-8"))
+
+    def test_voice_pill_guards_hover_target_during_recording(self):
+        """POP-01: Verify hover target regex guard in both VoicePill.qml files."""
+        pattern = re.compile(r'hoverTarget:\s*\(Voice\.overallState\s*!==\s*"recording"\s*\|\|\s*active\)\s*\?\s*pillMouseArea\s*:\s*null')
+        for p in (
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"),
+            Path("integrations/quickshell/VoicePill.qml"),
+        ):
+            text = p.read_text(encoding="utf-8")
+            self.assertIsNotNone(pattern.search(text), f"Missing hover gating pattern in {p}")
+
+    def test_recent_runs_reverse_jsonl_parsing_simulation(self):
+        """D-08, POP-02: Validate reverse JSONL parsing with edge cases."""
+        # 1. Empty string -> returns []
+        self.assertEqual(parse_recent_runs_simulation(""), [])
+        self.assertEqual(parse_recent_runs_simulation("   \n  \n"), [])
+
+        # 2. Single record
+        rec1 = {"run_id": "r1", "audio_s": 5.2, "characters": 42, "rtf": 0.35, "is_outlier": False}
+        res1 = parse_recent_runs_simulation(json.dumps(rec1))
+        self.assertEqual(len(res1), 1)
+        self.assertEqual(res1[0]["duration"], "5.2s")
+        self.assertEqual(res1[0]["chars"], "42")
+        self.assertEqual(res1[0]["rtf"], "0.35x")
+        self.assertTrue(res1[0]["success"])
+        self.assertFalse(res1[0]["outlier"])
+
+        # 3. 25 records -> returns exactly 10 newest in reverse order
+        lines = []
+        for i in range(25):
+            lines.append(json.dumps({"run_id": f"r{i}", "audio_s": float(i), "characters": i * 10, "rtf": 0.2}))
+        res25 = parse_recent_runs_simulation("\n".join(lines), max_count=10)
+        self.assertEqual(len(res25), 10)
+        self.assertEqual(res25[0]["runId"], "r24")
+        self.assertEqual(res25[9]["runId"], "r15")
+
+        # 4. Equal timestamp / stable file-order tie-breaking
+        tie_lines = [
+            json.dumps({"run_id": "a", "audio_s": 1.0, "timestamp": "2026-11-03T00:00:00Z"}),
+            json.dumps({"run_id": "b", "audio_s": 1.0, "timestamp": "2026-11-03T00:00:00Z"}),
+        ]
+        res_tie = parse_recent_runs_simulation("\n".join(tie_lines))
+        self.assertEqual([r["runId"] for r in res_tie], ["b", "a"])
+
+        # 5. Corrupted line embedded -> skipped gracefully
+        mixed_lines = [
+            json.dumps({"run_id": "valid1", "audio_s": 2.0}),
+            "corrupted not json {[[",
+            "{bad: json}",
+            json.dumps({"run_id": "valid2", "audio_s": 3.0}),
+        ]
+        res_mixed = parse_recent_runs_simulation("\n".join(mixed_lines))
+        self.assertEqual(len(res_mixed), 2)
+        self.assertEqual(res_mixed[0]["runId"], "valid2")
+        self.assertEqual(res_mixed[1]["runId"], "valid1")

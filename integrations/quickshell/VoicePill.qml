@@ -41,6 +41,8 @@ BarGroup {
     readonly property alias contentContainer: contentContainer
     readonly property alias pillMouseArea: pillMouseArea
     readonly property alias inertMouseArea: pillMouseArea
+    readonly property alias hoverArea: pillMouseArea
+    readonly property alias voicePopup: voicePopup
 
     // Effective Lifecycle State (Sequential Linear Flow)
     readonly property string effectiveState: {
@@ -125,19 +127,19 @@ BarGroup {
         }
     ]
 
-    readonly property bool isClickable: effectiveState === "transcribing" || effectiveState === "typing" || effectiveState === "wrapup"
-
     MouseArea {
         id: pillMouseArea
         parent: root
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
+        acceptedButtons: Qt.AllButtons
         hoverEnabled: true
-        cursorShape: root.isClickable ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: {
-            if (root.isClickable) {
-                Voice.openReport();
-            }
+        cursorShape: Qt.ArrowCursor
+        onPressed: event => event.accepted = true
+        onClicked: event => event.accepted = true
+
+        VoicePopup {
+            id: voicePopup
+            hoverTarget: (Voice.overallState !== "recording" || active) ? pillMouseArea : null
         }
     }
 
