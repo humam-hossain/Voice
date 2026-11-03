@@ -698,7 +698,7 @@ StyledPopup {
                 // Left Column: Live Telemetry + Recent Dictations + Open Full Report
                 ColumnLayout {
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 380
+                    Layout.preferredWidth: 400
                     Layout.alignment: Qt.AlignTop
                     spacing: 12
 
@@ -743,9 +743,8 @@ StyledPopup {
                             TelemetryRow {
                                 label: "Characters"
                                 value: {
-                                    if (Voice.overallState === "recording") return "--";
-                                    if (Voice.overallState === "transcribing" || Voice.overallState === "typing") {
-                                        return Voice.liveCharsOut > 0 ? String(Voice.liveCharsOut) : "--";
+                                    if (Voice.overallState !== "idle") {
+                                        return Voice.liveCharsOut > 0 ? String(Voice.liveCharsOut) : "0";
                                     }
                                     if (root.recentRuns.length > 0 && root.recentRuns[0].chars !== "--") {
                                         return root.recentRuns[0].chars;
@@ -936,21 +935,14 @@ StyledPopup {
                                 id: openReportBtn
                                 Layout.fillWidth: true
                                 mainText: "Open Full Report"
+                                materialIcon: "open_in_new"
                                 colBackground: Appearance.colors.colPrimaryContainer
                                 mainContentComponent: Component {
-                                    RowLayout {
-                                        spacing: 8
-                                        MaterialSymbol {
-                                            text: "open_in_new"
-                                            iconSize: 18
-                                            color: Appearance.colors.colPrimary
-                                        }
-                                        StyledText {
-                                            text: "Open Full Report"
-                                            font.pixelSize: Appearance.font.pixelSize.small
-                                            font.weight: Font.DemiBold
-                                            color: Appearance.colors.colPrimary
-                                        }
+                                    StyledText {
+                                        text: openReportBtn.mainText
+                                        font.pixelSize: Appearance.font.pixelSize.small
+                                        font.weight: Font.DemiBold
+                                        color: Appearance.colors.colPrimary
                                     }
                                 }
                                 onClicked: {

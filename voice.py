@@ -2345,6 +2345,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         "eta_confidence": None,
         "eta_source": None,
         "overrun": False,
+        "chars_out": 0,
         "report_path": str(voicemode_telemetry.get_state_dir() / "report.html"),
     }
     last_eta_update = 0.0
@@ -2568,6 +2569,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     segments_done=done,
                     transcribed_audio_s=transcribed_s,
                     total_duration_s=live_rec,
+                    chars_out=live_chars,
                 )
 
     wav_paths: list[Path] = []
@@ -2613,6 +2615,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
             segments=0,
             segments_done=0,
             total_duration_s=0.0,
+            chars_out=0,
         )
 
         play_cue(args, "start")
@@ -2654,6 +2657,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     segs = int(math.ceil(live / seg_duration)) if seg_duration and seg_duration > 0 else 0
                     with status_lock:
                         cur_transcribed = status_state.get("transcribed_audio_s", 0.0)
+                        cur_chars = status_state.get("chars_out", 0)
                     _publish_status(
                         "recording",
                         "capture",
@@ -2661,6 +2665,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                         segments=segs,
                         transcribed_audio_s=cur_transcribed,
                         total_duration_s=live,
+                        chars_out=cur_chars,
                     )
                 except Exception:
                     pass

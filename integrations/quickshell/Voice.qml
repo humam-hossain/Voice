@@ -203,6 +203,7 @@ Singleton {
                     }
                 } else {
                     root.sttPid = pid;
+                    root.resetDuration();
                 }
 
                 if (root.sttPid > 0) {
@@ -269,6 +270,7 @@ Singleton {
                 root.totalElapsedSeconds = 0;
                 root.formattedTotalDuration = "0:00";
                 root.formattedDuration = "0:00";
+                root.liveCharsOut = 0;
             } else {
                 if (st.audio_s !== undefined && st.audio_s !== null && st.audio_s >= 0) {
                     root.recordedAudioSeconds = st.audio_s;
