@@ -10,30 +10,25 @@ updated: 2026-11-03T07:27:00Z
 
 ## Current Test
 
-number: 2
-name: Status Header, Action Gating, 2-Column Alignment, 3 Categorized Cards & Auto-Type Switch
+number: 3
+name: Live Telemetry Characters, Recent Dictations Table & High-Visibility Report Button
 expected: |
   Inside the VoicePopup overlay:
-  1. Top Status Banner:
-     - Concise 1-word titles: "Recording", "Transcribing", "Typing", "Speaking", "Idle".
-     - Displays pure live duration timer without any artificial " / 5:00" limit.
-     - Pulsing dot animation with matching bar colors.
-  2. Action Button State Gating:
-     - When idle: Toggle button shows "Start" (green, enabled).
-     - When recording: Toggle button shows "Stop" (primary/accent color, enabled).
-     - When transcribing/typing: Button stays labeled "Start" but is disabled/dimmed (opacity 0.5) without redundant "Transcribing" text, while status banner above clearly shows current state.
-     - Cancel button: Enabled only while recording, disabled otherwise.
-  3. 3 Distinct Categorized Cards & Reordering:
-     - Box 1 (Top): "General / Audio" (tune icon, primary color) with Audio Cues switch and Corpus Capture selector.
-     - Box 2 (Middle): "Speech-to-Text (STT)" (mic icon, sky blue color) with STT Model, Device, Compute Type, Language, Chunk Duration, Beam Size, VAD Filter, and Auto-Type switch.
-     - Box 3 (Bottom): "Text-to-Speech (TTS)" (volume_up icon, secondary color) with TTS Backend and TTS Voice.
-     - Each section is an independent container card with its own border, header icon, colored title, and divider.
-  4. Strict 2-Column Grid Alignment:
-     - Column 1: Configuration label with consistent 125px width across all rows.
-     - Column 2: All options/values, switches, steppers, and multi-row model/voice grids stay strictly inside Column 2 and never cross into Column 1.
-     - 4-column aligned grids for STT Model (10 models) and TTS Voice (10 voices).
-  5. Auto-Type Switch:
-     - Replaced conflicting "type" vs "paste" selector with a clean "Auto-Type" switch (ON = types into window; OFF = preserves in clipboard for manual pasting, e.g. Ctrl+Shift+V in terminal).
+  1. Live Telemetry:
+     - "Characters" row displays recognized character count (from the latest completed dictation) when idle instead of showing "--".
+     - Displays "Typing..." during active typing.
+  2. Recent Dictations Table:
+     - Formatted as a structured table with dedicated column headers: `Time`, `Audio`, `Chars`, `RTF`, and `Status`.
+     - `Time`: HH:mm timestamp for each run.
+     - `Audio`: Accurate audio duration (e.g. `17.2s` or `0.0s`).
+     - `Chars`: Formatted recognized character count (e.g. `809`, `61`, or `0`).
+     - `RTF`: Calculated real-time factor (e.g. `0.52x`, `0.61x`).
+     - `Status`: Distinct icons and badges:
+       - Cancelled runs display a rose `close` icon and `cancelled` label.
+       - Succeeded runs display a green `check` icon and `ok` label.
+       - Outlier runs display an amber `warning` icon and `outlier` label.
+  3. Open Full Report Button:
+     - Uses `colPrimaryContainer` background with bold `colPrimary` icon and text so it stands out with high contrast.
 awaiting: user response
 
 ## Tests
@@ -50,8 +45,7 @@ expected: |
   3. 3 Distinct Cards: General/Audio (top), STT (middle), TTS (bottom) in separate visual boxes.
   4. Strict 2-Column Alignment: Labels strictly in 125px Column 1; all controls, chips, and grids strictly in Column 2.
   5. Auto-Type Switch: Replaces type/paste with simple ON/OFF auto-typing switch.
-result: [pending]
-result: [pending]
+result: pass
 
 ### 3. Live Telemetry & Duration Stats
 expected: |
