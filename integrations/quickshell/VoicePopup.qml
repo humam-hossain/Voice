@@ -271,7 +271,8 @@ StyledPopup {
         StyledText {
             text: switchRow.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
             Layout.preferredWidth: 125
         }
         StyledSwitch {
@@ -292,7 +293,8 @@ StyledPopup {
         StyledText {
             text: selRow.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
             Layout.preferredWidth: 125
         }
         RowLayout {
@@ -322,7 +324,8 @@ StyledPopup {
         StyledText {
             text: modelGrid.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
             Layout.preferredWidth: 125
             Layout.alignment: Qt.AlignTop
             Layout.topMargin: 6
@@ -393,7 +396,8 @@ StyledPopup {
         StyledText {
             text: voiceGrid.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
             Layout.preferredWidth: 125
             Layout.alignment: Qt.AlignTop
             Layout.topMargin: 6
@@ -467,7 +471,8 @@ StyledPopup {
         StyledText {
             text: numRow.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
             Layout.preferredWidth: 125
         }
 
@@ -557,7 +562,8 @@ StyledPopup {
         StyledText {
             text: tRow.label
             font.pixelSize: Appearance.font.pixelSize.small
-            color: Appearance.colors.colOnSurfaceVariant
+            font.weight: Font.Medium
+            color: Appearance.colors.colOnSurface
         }
         Item { Layout.fillWidth: true }
         StyledText {
@@ -565,7 +571,7 @@ StyledPopup {
             font.pixelSize: Appearance.font.pixelSize.small
             font.family: Appearance.font.family.numbers
             font.weight: Font.DemiBold
-            color: Appearance.colors.colOnLayer1
+            color: Appearance.colors.colPrimary
         }
     }
 
@@ -715,14 +721,28 @@ StyledPopup {
                         ColumnLayout {
                             id: liveCol
                             anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
+                            anchors.margins: 12
+                            spacing: 10
 
-                            StyledText {
-                                text: "Live Telemetry"
-                                font.pixelSize: Appearance.font.pixelSize.normal
-                                font.weight: Font.DemiBold
-                                color: Appearance.colors.colPrimary
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                MaterialSymbol {
+                                    text: "analytics"
+                                    iconSize: 18
+                                    color: Appearance.colors.colPrimary
+                                }
+                                StyledText {
+                                    text: "Live Telemetry"
+                                    font.pixelSize: Appearance.font.pixelSize.normal
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colPrimary
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
                             }
 
                             TelemetryRow {
@@ -768,14 +788,28 @@ StyledPopup {
                         ColumnLayout {
                             id: recentCol
                             anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
+                            anchors.margins: 12
+                            spacing: 10
 
-                            StyledText {
-                                text: "Recent Dictations"
-                                font.pixelSize: Appearance.font.pixelSize.normal
-                                font.weight: Font.DemiBold
-                                color: Appearance.colors.colPrimary
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                MaterialSymbol {
+                                    text: "history"
+                                    iconSize: 18
+                                    color: Appearance.colors.colPrimary
+                                }
+                                StyledText {
+                                    text: "Recent Dictations"
+                                    font.pixelSize: Appearance.font.pixelSize.normal
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colPrimary
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
                             }
 
                             // Table Column Headers
@@ -788,28 +822,28 @@ StyledPopup {
                                     text: "Time"
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSubtext
-                                    Layout.preferredWidth: 130
+                                    color: Appearance.colors.colOnSurfaceVariant
+                                    Layout.preferredWidth: 125
                                 }
                                 StyledText {
                                     text: "Audio"
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSubtext
+                                    color: Appearance.colors.colOnSurfaceVariant
                                     Layout.preferredWidth: 54
                                 }
                                 StyledText {
                                     text: "Chars"
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSubtext
+                                    color: Appearance.colors.colOnSurfaceVariant
                                     Layout.preferredWidth: 52
                                 }
                                 StyledText {
                                     text: "RTF"
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSubtext
+                                    color: Appearance.colors.colOnSurfaceVariant
                                     Layout.preferredWidth: 52
                                 }
                                 Item { Layout.fillWidth: true }
@@ -817,7 +851,7 @@ StyledPopup {
                                     text: "Status"
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSubtext
+                                    color: Appearance.colors.colOnSurfaceVariant
                                     Layout.preferredWidth: 70
                                     horizontalAlignment: Text.AlignRight
                                 }
@@ -864,8 +898,8 @@ StyledPopup {
                                                 text: runRow.modelData.time
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
-                                                color: Appearance.colors.colOnSurfaceVariant
-                                                Layout.preferredWidth: 130
+                                                color: Appearance.colors.colOnSurface
+                                                Layout.preferredWidth: 125
                                             }
 
                                             // Audio Duration
@@ -874,7 +908,7 @@ StyledPopup {
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
                                                 font.weight: Font.Medium
-                                                color: Appearance.colors.colOnLayer1
+                                                color: Appearance.colors.colOnSurface
                                                 Layout.preferredWidth: 54
                                             }
 
@@ -883,7 +917,7 @@ StyledPopup {
                                                 text: runRow.modelData.chars
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
-                                                color: Appearance.colors.colOnSurfaceVariant
+                                                color: Appearance.colors.colOnSurface
                                                 Layout.preferredWidth: 52
                                             }
 
@@ -893,7 +927,7 @@ StyledPopup {
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
                                                 font.weight: Font.Medium
-                                                color: runRow.modelData.outlier ? "#f59e0b" : Appearance.colors.colOnLayer1
+                                                color: runRow.modelData.outlier ? "#f59e0b" : Appearance.colors.colOnSurface
                                                 Layout.preferredWidth: 52
                                             }
 
@@ -1034,13 +1068,13 @@ StyledPopup {
                                 MaterialSymbol {
                                     text: "mic"
                                     iconSize: 18
-                                    color: root.skyBlue
+                                    color: Appearance.colors.colPrimary
                                 }
                                 StyledText {
                                     text: "Speech-to-Text (STT)"
                                     font.pixelSize: Appearance.font.pixelSize.normal
                                     font.weight: Font.DemiBold
-                                    color: root.skyBlue
+                                    color: Appearance.colors.colPrimary
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true
@@ -1130,13 +1164,13 @@ StyledPopup {
                                 MaterialSymbol {
                                     text: "volume_up"
                                     iconSize: 18
-                                    color: Appearance.colors.colSecondary
+                                    color: Appearance.colors.colPrimary
                                 }
                                 StyledText {
                                     text: "Text-to-Speech (TTS)"
                                     font.pixelSize: Appearance.font.pixelSize.normal
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colSecondary
+                                    color: Appearance.colors.colPrimary
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true
