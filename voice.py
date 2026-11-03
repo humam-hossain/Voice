@@ -417,6 +417,66 @@ def load_hermes_tts_defaults() -> TtsDefaults:
         return defaults
 
 
+def get_config_dir() -> Path:
+    xdg_config = os.getenv("XDG_CONFIG_HOME")
+    if xdg_config:
+        config_dir = Path(xdg_config).expanduser() / "voicemode"
+    else:
+        config_dir = Path("~/.config/voicemode").expanduser()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(config_dir, 0o700)
+    except OSError:
+        pass
+    return config_dir
+
+
+def get_config_path() -> Path:
+    return get_config_dir() / "config.json"
+
+
+def load_user_config() -> dict[str, Any]:
+    path = get_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            return {}
+        data = json.loads(content)
+        if isinstance(data, dict):
+            return data
+        return {}
+    except Exception:
+        return {}
+
+
+def save_user_config(data: dict[str, Any]) -> None:
+    config_dir = get_config_dir()
+    target_path = get_config_path()
+    fd, tmp_path = tempfile.mkstemp(dir=config_dir, prefix="config-", suffix=".tmp")
+    try:
+        content = json.dumps(data, indent=2) + "\n"
+        os.write(fd, content.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, target_path)
+        tmp_path = None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def edge_rate_from_speed(speed: float) -> Optional[str]:
     if speed == 1.0:
         return None
@@ -1091,10 +1151,19 @@ def chunk_seconds(args: argparse.Namespace | None = None) -> float:
             return max(1.0, float(args.chunk_seconds))
         except (TypeError, ValueError):
             pass
-    try:
-        return max(1.0, float(os.getenv("VOICE_CHUNK_SECONDS", str(DEFAULT_CHUNK_SECONDS))))
-    except ValueError:
-        return DEFAULT_CHUNK_SECONDS
+    if os.getenv("VOICE_CHUNK_SECONDS"):
+        try:
+            return max(1.0, float(os.getenv("VOICE_CHUNK_SECONDS")))
+        except ValueError:
+            pass
+    cfg = load_user_config()
+    raw_val = cfg.get("chunk_duration", cfg.get("chunk_seconds"))
+    if raw_val is not None:
+        try:
+            return max(1.0, float(raw_val))
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_CHUNK_SECONDS
 
 
 def stt_timeout_seconds() -> float:
@@ -2158,6 +2227,13 @@ def background_argv(args: argparse.Namespace) -> list[str]:
         argv.append("--no-keep-newlines")
     if getattr(args, "chunk_seconds", None) is not None:
         argv += ["--chunk-seconds", str(args.chunk_seconds)]
+    if getattr(args, "vad_filter", True):
+        argv.append("--vad-filter")
+    else:
+        argv.append("--no-vad-filter")
+    capture_corp = getattr(args, "capture_corpus", None)
+    if capture_corp and capture_corp != "none":
+        argv += ["--capture-corpus", capture_corp]
     return argv
 
 
@@ -3994,15 +4070,24 @@ def run_verification(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     tts_defaults = load_hermes_tts_defaults()
+    cfg = load_user_config()
     parser = argparse.ArgumentParser(description="Desktop-global STT and TTS voice command.")
     parser.add_argument("--doctor", action="store_true", help="Run system pre-flight diagnostic probe.")
     parser.add_argument("--verify", action="store_true", help="Run end-to-end system verification suite.")
+
+    # 12. capture_corpus
+    if os.getenv("VOICEMODE_CORPUS_CAPTURE") is not None:
+        default_capture = os.getenv("VOICEMODE_CORPUS_CAPTURE")
+    elif "capture_corpus" in cfg or "corpus_capture" in cfg:
+        default_capture = cfg.get("capture_corpus", cfg.get("corpus_capture"))
+    else:
+        default_capture = None
     parser.add_argument(
         "--capture-corpus",
         nargs="?",
         const="outliers",
         choices=("none", "outliers", "all"),
-        default=None,
+        default=default_capture,
         help="Capture diagnostic audio corpus ('none', 'outliers', 'all'; default: none or VOICEMODE_CORPUS_CAPTURE)",
     )
     parser.add_argument(
@@ -4033,16 +4118,52 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Emergency release of any stuck virtual keyboard keys.",
     )
-    parser.add_argument("--model", default=os.getenv("VOICE_STT_MODEL", "medium.en"))
-    parser.add_argument("--device", default=os.getenv("VOICE_STT_DEVICE", "cpu"))
-    parser.add_argument("--compute-type", default=os.getenv("VOICE_STT_COMPUTE_TYPE", "int8"))
-    parser.add_argument("--language", default=os.getenv("VOICE_STT_LANGUAGE", "en"))
-    parser.add_argument("--beam-size", type=int, default=int(os.getenv("VOICE_STT_BEAM_SIZE", "1")))
+
+    # 1. model
+    default_model = os.getenv("VOICE_STT_MODEL") or cfg.get("model") or "medium.en"
+    parser.add_argument("--model", default=default_model)
+
+    # 2. device
+    default_device = os.getenv("VOICE_STT_DEVICE") or cfg.get("device") or "cpu"
+    parser.add_argument("--device", default=default_device)
+
+    # 3. compute_type
+    default_compute_type = os.getenv("VOICE_STT_COMPUTE_TYPE") or cfg.get("compute_type") or "int8"
+    parser.add_argument("--compute-type", default=default_compute_type)
+
+    # 4. language
+    if os.getenv("VOICE_STT_LANGUAGE") is not None:
+        default_language = os.getenv("VOICE_STT_LANGUAGE")
+    elif "language" in cfg:
+        cfg_lang = cfg.get("language")
+        default_language = None if cfg_lang in ("auto", "", None) else cfg_lang
+    else:
+        default_language = "en"
+    parser.add_argument("--language", default=default_language)
+
+    # 7. beam_size
+    if os.getenv("VOICE_STT_BEAM_SIZE") is not None:
+        try:
+            default_beam_size = int(os.getenv("VOICE_STT_BEAM_SIZE"))
+        except ValueError:
+            default_beam_size = 1
+    elif "beam_size" in cfg:
+        try:
+            default_beam_size = int(cfg.get("beam_size", 1))
+        except (TypeError, ValueError):
+            default_beam_size = 1
+    else:
+        default_beam_size = 1
+    parser.add_argument("--beam-size", type=int, default=default_beam_size)
+
+    # 8. vad_filter
+    cfg_vad = cfg.get("vad_filter", True)
+    default_vad_filter = env_bool("VOICE_VAD_FILTER", cfg_vad if isinstance(cfg_vad, bool) else True)
     parser.add_argument(
         "--vad-filter",
         dest="vad_filter",
         action="store_true",
-        default=env_bool("VOICE_VAD_FILTER", True),
+        default=default_vad_filter,
         help="Enable Silero VAD filter to trim silence (default: True).",
     )
     parser.add_argument(
@@ -4051,13 +4172,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Disable Silero VAD filter.",
     )
+    parser.set_defaults(vad_filter=default_vad_filter)
+
     parser.add_argument("--input-device", default=os.getenv("VOICE_INPUT_DEVICE"))
     parser.add_argument("--sample-rate", type=int, default=None)
     parser.add_argument("--save-dir", type=Path, default=None, help="Keep recorded wav files in this directory.")
+
+    # 5. chunk_duration / chunk_seconds
+    if os.getenv("VOICE_CHUNK_SECONDS") is not None:
+        try:
+            default_chunk_seconds = float(os.getenv("VOICE_CHUNK_SECONDS"))
+        except ValueError:
+            default_chunk_seconds = None
+    elif "chunk_duration" in cfg or "chunk_seconds" in cfg:
+        raw_chunk = cfg.get("chunk_duration", cfg.get("chunk_seconds"))
+        try:
+            default_chunk_seconds = float(raw_chunk) if raw_chunk is not None else None
+        except (TypeError, ValueError):
+            default_chunk_seconds = None
+    else:
+        default_chunk_seconds = None
     parser.add_argument(
         "--chunk-seconds",
         type=float,
-        default=None,
+        default=default_chunk_seconds,
         help="Audio chunk duration in seconds (default: 180.0 / 3 minutes).",
     )
     parser.add_argument("--allow-download", action="store_true", help="Allow faster-whisper to download a missing model.")
@@ -4108,15 +4246,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stop-tts", action="store_true", help="Stop active TTS playback.")
     parser.add_argument("--tts-check", action="store_true", help="Print TTS voice, speed, and dependency status.")
     parser.add_argument("--list-tts-voices", action="store_true", help="List available Kokoro voice IDs.")
+    # 11. tts_backend
+    default_tts_backend = os.getenv("VOICE_TTS_BACKEND") or cfg.get("tts_backend") or DEFAULT_TTS_BACKEND
     parser.add_argument(
         "--tts-backend",
         choices=("kokoro", "edge"),
-        default=os.getenv("VOICE_TTS_BACKEND", DEFAULT_TTS_BACKEND),
+        default=default_tts_backend,
         help="TTS backend. Default: kokoro.",
     )
+    # 10. tts_voice
+    default_tts_voice = os.getenv("VOICE_TTS_VOICE") or cfg.get("tts_voice")
     parser.add_argument(
         "--tts-voice",
-        default=os.getenv("VOICE_TTS_VOICE"),
+        default=default_tts_voice,
         help=f"TTS voice ID. Kokoro default: {DEFAULT_KOKORO_VOICE}; secondary: {SECONDARY_KOKORO_VOICE}.",
     )
     parser.add_argument(
@@ -4158,10 +4300,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Keep Kokoro chunk boundaries untrimmed. Default.",
     )
+    # 6. output_method
+    default_output_method = os.getenv("VOICE_OUTPUT_METHOD") or cfg.get("output_method") or "type"
     parser.add_argument(
         "--output-method",
         choices=("type", "paste", "terminal-paste", "clipboard"),
-        default=os.getenv("VOICE_OUTPUT_METHOD", "type"),
+        default=default_output_method,
         help="How background mode inserts the transcript. Default: type.",
     )
     parser.add_argument(
@@ -4199,8 +4343,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-paste", dest="paste", action="store_false", help="Do not insert after background transcription.")
     parser.add_argument("--notify", dest="notify", action="store_true", default=True, help="Show desktop notifications.")
     parser.add_argument("--no-notify", dest="notify", action="store_false", help="Disable desktop notifications.")
-    parser.add_argument("--beep", dest="beep", action="store_true", default=env_bool("VOICE_BEEP", True), help="Play audible recording cues.")
+    # 9. beep
+    cfg_beep = cfg.get("beep", True)
+    default_beep = env_bool("VOICE_BEEP", cfg_beep if isinstance(cfg_beep, bool) else True)
+    parser.add_argument("--beep", dest="beep", action="store_true", default=default_beep, help="Play audible recording cues.")
     parser.add_argument("--no-beep", dest="beep", action="store_false", help="Disable audible recording cues.")
+    parser.set_defaults(beep=default_beep)
     parser.add_argument(
         "--recording-beep-interval",
         type=float,
