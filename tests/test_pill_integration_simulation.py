@@ -477,9 +477,9 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
             self.assertIn("StyledPopup {", content)
             self.assertIn("350", content)
 
-            # Array-based Quickshell.execDetached for toggle and cancel
-            self.assertIn('Quickshell.execDetached(["voice", "--toggle"])', content)
-            self.assertIn('Quickshell.execDetached(["voice", "--cancel"])', content)
+            # Array-based Quickshell.execDetached for toggle and cancel with voiceBin
+            self.assertIn('Quickshell.execDetached([root.voiceBin, "--toggle"])', content)
+            self.assertIn('Quickshell.execDetached([root.voiceBin, "--cancel"])', content)
 
             # Action button colors
             self.assertIn("#4ade80", content)  # Start
