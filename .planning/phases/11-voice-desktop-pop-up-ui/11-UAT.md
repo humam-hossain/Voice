@@ -11,15 +11,15 @@ updated: 2026-11-03T07:27:00Z
 ## Current Test
 
 number: 3
-name: Live Telemetry Characters, Recent Dictations Table & High-Visibility Report Button
+name: Live Telemetry Characters, Recent Dictations Table (Date+AM/PM) & Single-Icon Report Button
 expected: |
   Inside the VoicePopup overlay:
   1. Live Telemetry:
-     - "Characters" row displays recognized character count (from the latest completed dictation) when idle instead of showing "--".
-     - Displays "Typing..." during active typing.
+     - "Characters" row starts at "0" during active recording, updates live with recognized character count as incremental chunks decode, stays accurate through typing, and displays the finalized count when idle.
+     - Never displays stale character counts from previous recordings during an active session.
   2. Recent Dictations Table:
      - Formatted as a structured table with dedicated column headers: `Time`, `Audio`, `Chars`, `RTF`, and `Status`.
-     - `Time`: HH:mm timestamp for each run.
+     - `Time`: Local date + 12-hour AM/PM format for each run (e.g. `Nov 3, 2:35 PM`).
      - `Audio`: Accurate audio duration (e.g. `17.2s` or `0.0s`).
      - `Chars`: Formatted recognized character count (e.g. `809`, `61`, or `0`).
      - `RTF`: Calculated real-time factor (e.g. `0.52x`, `0.61x`).
@@ -28,7 +28,7 @@ expected: |
        - Succeeded runs display a green `check` icon and `ok` label.
        - Outlier runs display an amber `warning` icon and `outlier` label.
   3. Open Full Report Button:
-     - Uses `colPrimaryContainer` background with bold `colPrimary` icon and text so it stands out with high contrast.
+     - Uses `colPrimaryContainer` background with a single `open_in_new` icon and bold text.
 awaiting: user response
 
 ## Tests
