@@ -139,7 +139,7 @@ BarGroup {
 
         VoicePopup {
             id: voicePopup
-            hoverTarget: (Voice.overallState !== "recording" || active) ? pillMouseArea : null
+            hoverTarget: pillMouseArea
         }
     }
 

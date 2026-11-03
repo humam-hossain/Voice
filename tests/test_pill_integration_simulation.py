@@ -502,18 +502,8 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
             self.assertNotIn("bash -c", content)
             self.assertNotRegex(content, r"\brm\s+-")
 
-    def test_hover_gating(self):
-        """POP-01: Verify hover gating logic across recorder states and QML bindings."""
-        def evaluate_hover_target(overall_state: str, active: bool) -> bool:
-            return (overall_state != "recording") or active
-
-        # State evaluations
-        self.assertTrue(evaluate_hover_target("idle", False))
-        self.assertFalse(evaluate_hover_target("recording", False))
-        self.assertTrue(evaluate_hover_target("recording", True))
-        self.assertTrue(evaluate_hover_target("transcribing", False))
-        self.assertTrue(evaluate_hover_target("typing", False))
-
+    def test_hover_target_always_accessible(self):
+        """POP-01: Verify hover target is bound directly to pillMouseArea across all states."""
         # Inspect VoicePill.qml files
         for p in (
             Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"),
@@ -521,7 +511,7 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
         ):
             content = p.read_text(encoding="utf-8")
             self.assertIn("VoicePopup {", content)
-            self.assertIn('hoverTarget: (Voice.overallState !== "recording" || active) ? pillMouseArea : null', content)
+            self.assertIn("hoverTarget: pillMouseArea", content)
             self.assertNotIn("Voice.openReport()", content)
 
     def test_voice_popup_and_pill_dotfiles_parity(self):
@@ -534,15 +524,15 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
         self.assertEqual(dotfiles_popup.read_text(encoding="utf-8"), repo_popup.read_text(encoding="utf-8"))
         self.assertEqual(dotfiles_pill.read_text(encoding="utf-8"), repo_pill.read_text(encoding="utf-8"))
 
-    def test_voice_pill_guards_hover_target_during_recording(self):
-        """POP-01: Verify hover target regex guard in both VoicePill.qml files."""
-        pattern = re.compile(r'hoverTarget:\s*\(Voice\.overallState\s*!==\s*"recording"\s*\|\|\s*active\)\s*\?\s*pillMouseArea\s*:\s*null')
+    def test_voice_pill_binds_hover_target(self):
+        """POP-01: Verify hover target regex matches pillMouseArea in both VoicePill.qml files."""
+        pattern = re.compile(r'hoverTarget:\s*pillMouseArea')
         for p in (
             Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml"),
             Path("integrations/quickshell/VoicePill.qml"),
         ):
             text = p.read_text(encoding="utf-8")
-            self.assertIsNotNone(pattern.search(text), f"Missing hover gating pattern in {p}")
+            self.assertIsNotNone(pattern.search(text), f"Missing hover target binding in {p}")
 
     def test_recent_runs_reverse_jsonl_parsing_simulation(self):
         """D-08, POP-02: Validate reverse JSONL parsing with edge cases."""
