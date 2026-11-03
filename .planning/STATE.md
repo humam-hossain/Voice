@@ -99,6 +99,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 261030-shz | align chunk-aware remaining ETA and actual_s ledger metric | 2026-10-30 | ff782d5 | [261030-shz-align-chunk-aware-remaining-eta-and-actu](./quick/261030-shz-align-chunk-aware-remaining-eta-and-actu/) |
 | 261103-nhq | Fix status bar timing metrics displaying 0 after recording/transcription | 2026-11-03 | 237debe | [261103-nhq-fix-status-bar-timing-metrics-displaying](./quick/261103-nhq-fix-status-bar-timing-metrics-displaying/) |
+| 261103-oex | Add STT/TTS model parameter and RAM specs and Whisper update/download button | 2026-11-03 | 708a728 | [261103-oex-add-model-parameter-and-ram-specs-and-wh](./quick/261103-oex-add-model-parameter-and-ram-specs-and-wh/) |
 
 ## Deferred Items
 
@@ -109,9 +110,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-11-03T11:18:00.000Z
-Stopped at: Completed quick task 261103-nhq: Fix status bar timing metrics displaying 0 after recording/transcription
-Resume file: .planning/quick/261103-nhq-fix-status-bar-timing-metrics-displaying/261103-nhq-SUMMARY.md
+Last session: 2026-11-03T11:45:00.000Z
+Stopped at: Completed quick task 261103-oex: Add STT/TTS model parameter and RAM specs and Whisper update/download button
+Resume file: .planning/quick/261103-oex-add-model-parameter-and-ram-specs-and-wh/261103-oex-SUMMARY.md
 
 ## Operator Next Steps
 
