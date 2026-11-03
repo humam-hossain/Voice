@@ -26,20 +26,21 @@ class TestAudioChunking(TempXdgTestCase):
 
     def test_chunk_seconds_resolution(self) -> None:
         # Default
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(voice.chunk_seconds(), 180.0)
+        with patch.object(voice, "load_user_config", return_value={}):
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(voice.chunk_seconds(), 180.0)
 
-        # Environment variable
-        with patch.dict(os.environ, {"VOICE_CHUNK_SECONDS": "90.0"}):
-            self.assertEqual(voice.chunk_seconds(), 90.0)
+            # Environment variable
+            with patch.dict(os.environ, {"VOICE_CHUNK_SECONDS": "90.0"}):
+                self.assertEqual(voice.chunk_seconds(), 90.0)
 
-        # CLI args override
-        args = voice.parse_args(["--chunk-seconds", "45.0"])
-        self.assertEqual(voice.chunk_seconds(args), 45.0)
+            # CLI args override
+            args = voice.parse_args(["--chunk-seconds", "45.0"])
+            self.assertEqual(voice.chunk_seconds(args), 45.0)
 
-        # Invalid env var fallback
-        with patch.dict(os.environ, {"VOICE_CHUNK_SECONDS": "invalid"}):
-            self.assertEqual(voice.chunk_seconds(), 180.0)
+            # Invalid env var fallback
+            with patch.dict(os.environ, {"VOICE_CHUNK_SECONDS": "invalid"}):
+                self.assertEqual(voice.chunk_seconds(), 180.0)
 
     def test_recorder_single_chunk_under_threshold(self) -> None:
         # 16 kHz sample rate, 1 second chunk duration = 16,000 samples per chunk

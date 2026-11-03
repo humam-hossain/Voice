@@ -45,12 +45,12 @@ StyledPopup {
 
     readonly property string stateTitle: {
         switch (Voice.overallState) {
-            case "recording": return "Recording Active";
-            case "transcribing": return "Transcribing Audio...";
-            case "typing": return "Typing Output...";
-            case "speaking": return "Speaking...";
-            case "starting": return "Starting...";
-            default: return "Ready / Idle";
+            case "recording": return "Recording";
+            case "transcribing": return "Transcribing";
+            case "typing": return "Typing";
+            case "speaking": return "Speaking";
+            case "starting": return "Starting";
+            default: return "Idle";
         }
     }
 
@@ -185,7 +185,41 @@ StyledPopup {
         root.reloadMetrics();
     }
 
-    // Custom reusable control components
+    // --- Custom reusable control components ---
+
+    // Option chip with stable background and 2px primary border on hover
+    component OptionChip: Rectangle {
+        id: chip
+        property string text: ""
+        property bool selected: false
+        signal clicked()
+
+        implicitWidth: chipLabel.implicitWidth + 20
+        implicitHeight: 30
+        radius: Appearance.rounding.small
+
+        color: chip.selected ? Appearance.colors.colPrimary : Appearance.colors.colLayer2
+        border.width: chipArea.containsMouse ? 2 : (chip.selected ? 0 : 1)
+        border.color: chipArea.containsMouse ? Appearance.colors.colPrimary : Appearance.colors.colOutlineVariant
+
+        StyledText {
+            id: chipLabel
+            anchors.centerIn: parent
+            text: chip.text
+            font.pixelSize: Appearance.font.pixelSize.small
+            font.weight: chip.selected ? Font.DemiBold : Font.Normal
+            color: chip.selected ? Appearance.m3colors.m3onPrimary : Appearance.colors.colOnLayer2
+        }
+
+        MouseArea {
+            id: chipArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: chip.clicked()
+        }
+    }
+
     component ConfigSwitchRow: RowLayout {
         id: switchRow
         property string label: ""
@@ -211,59 +245,116 @@ StyledPopup {
         property var currentVal: ""
         signal selected(var val)
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 12
         StyledText {
             text: selRow.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.preferredWidth: 105
+            Layout.preferredWidth: 120
         }
         RowLayout {
-            Layout.fillWidth: true
-            spacing: 4
+            spacing: 6
             Repeater {
                 model: selRow.options
-                delegate: RippleButton {
-                    id: optBtn
+                delegate: OptionChip {
+                    required property var modelData
+                    text: String(modelData)
+                    selected: selRow.currentVal === modelData
+                    onClicked: selRow.selected(modelData)
+                }
+            }
+        }
+        Item { Layout.fillWidth: true }
+    }
+
+    // Inline 2-row grid for STT models (completely eliminates external dropdown hover-loss)
+    component ConfigModelGridRow: ColumnLayout {
+        id: modelGrid
+        property string label: "STT Model"
+        property var currentVal: ""
+        signal selected(var val)
+        Layout.fillWidth: true
+        spacing: 6
+
+        StyledText {
+            text: modelGrid.label
+            font.pixelSize: Appearance.font.pixelSize.small
+            color: Appearance.colors.colOnSurfaceVariant
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Repeater {
+                model: ["tiny", "tiny.en", "base", "base.en", "small"]
+                delegate: OptionChip {
                     required property var modelData
                     Layout.fillWidth: true
-                    implicitHeight: 28
-                    buttonRadius: Appearance.rounding.small
-                    colBackground: selRow.currentVal === modelData ? Appearance.colors.colPrimary : Appearance.colors.colLayer2
-                    contentItem: StyledText {
-                        anchors.centerIn: parent
-                        text: String(optBtn.modelData)
-                        font.pixelSize: Appearance.font.pixelSize.smaller
-                        color: selRow.currentVal === optBtn.modelData ? Appearance.m3colors.m3onPrimary : Appearance.colors.colOnLayer2
-                    }
-                    onClicked: selRow.selected(optBtn.modelData)
+                    text: modelData
+                    selected: modelGrid.currentVal === modelData
+                    onClicked: modelGrid.selected(modelData)
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Repeater {
+                model: ["small.en", "medium", "medium.en", "large-v2", "large-v3"]
+                delegate: OptionChip {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    text: modelData
+                    selected: modelGrid.currentVal === modelData
+                    onClicked: modelGrid.selected(modelData)
                 }
             }
         }
     }
 
-    component ConfigComboRow: RowLayout {
-        id: comboRow
-        property string label: ""
-        property var options: []
+    // Inline 2-row grid for TTS voices (completely eliminates external dropdown hover-loss)
+    component ConfigVoiceGridRow: ColumnLayout {
+        id: voiceGrid
+        property string label: "TTS Voice"
         property var currentVal: ""
         signal selected(var val)
         Layout.fillWidth: true
         spacing: 6
+
         StyledText {
-            text: comboRow.label
+            text: voiceGrid.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.preferredWidth: 105
         }
-        StyledComboBox {
-            id: cb
+
+        RowLayout {
             Layout.fillWidth: true
-            implicitHeight: 32
-            model: comboRow.options
-            currentIndex: Math.max(0, comboRow.options.indexOf(comboRow.currentVal))
-            onActivated: function(index) {
-                comboRow.selected(comboRow.options[index]);
+            spacing: 6
+            Repeater {
+                model: ["af_heart", "af_bella", "af_nicole", "af_sky", "bf_emma", "bf_isabella"]
+                delegate: OptionChip {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    text: modelData
+                    selected: voiceGrid.currentVal === modelData
+                    onClicked: voiceGrid.selected(modelData)
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Repeater {
+                model: ["am_adam", "am_michael", "bm_george", "bm_lewis"]
+                delegate: OptionChip {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    text: modelData
+                    selected: voiceGrid.currentVal === modelData
+                    onClicked: voiceGrid.selected(modelData)
+                }
             }
         }
     }
@@ -275,59 +366,94 @@ StyledPopup {
         property real maxVal: 30
         property real step: 1
         property real currentVal: 1
+        property string unit: ""
         signal changed(real val)
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 12
+
         StyledText {
             text: numRow.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.preferredWidth: 105
+            Layout.preferredWidth: 120
         }
+
         RowLayout {
-            Layout.fillWidth: true
-            spacing: 4
-            RippleButton {
-                implicitWidth: 28
-                implicitHeight: 28
-                buttonRadius: Appearance.rounding.small
-                colBackground: Appearance.colors.colLayer2
-                contentItem: StyledText {
+            spacing: 6
+
+            Rectangle {
+                implicitWidth: 32
+                implicitHeight: 32
+                radius: Appearance.rounding.small
+                color: Appearance.colors.colLayer2
+                border.width: minusArea.containsMouse ? 2 : 1
+                border.color: minusArea.containsMouse ? Appearance.colors.colPrimary : Appearance.colors.colOutlineVariant
+
+                MaterialSymbol {
                     anchors.centerIn: parent
-                    text: "-"
-                    font.pixelSize: Appearance.font.pixelSize.normal
+                    text: "remove"
+                    iconSize: 18
                     color: Appearance.colors.colOnLayer2
                 }
-                onClicked: {
-                    const n = Math.max(numRow.minVal, numRow.currentVal - numRow.step);
-                    numRow.changed(n);
+
+                MouseArea {
+                    id: minusArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const n = Math.max(numRow.minVal, numRow.currentVal - numRow.step);
+                        numRow.changed(n);
+                    }
                 }
             }
-            StyledText {
-                Layout.fillWidth: true
-                horizontalAlignment: Text.AlignHCenter
-                text: String(numRow.currentVal)
-                font.pixelSize: Appearance.font.pixelSize.small
-                font.family: Appearance.font.family.numbers
-                color: Appearance.colors.colOnLayer1
-            }
-            RippleButton {
-                implicitWidth: 28
-                implicitHeight: 28
-                buttonRadius: Appearance.rounding.small
-                colBackground: Appearance.colors.colLayer2
-                contentItem: StyledText {
+
+            Rectangle {
+                implicitWidth: 54
+                implicitHeight: 32
+                radius: Appearance.rounding.small
+                color: Appearance.colors.colLayer1
+                border.width: 1
+                border.color: Appearance.colors.colOutlineVariant
+
+                StyledText {
                     anchors.centerIn: parent
-                    text: "+"
-                    font.pixelSize: Appearance.font.pixelSize.normal
+                    text: String(numRow.currentVal) + (numRow.unit.length > 0 ? numRow.unit : "")
+                    font.pixelSize: Appearance.font.pixelSize.small
+                    font.family: Appearance.font.family.numbers
+                    font.weight: Font.DemiBold
+                    color: Appearance.colors.colOnLayer1
+                }
+            }
+
+            Rectangle {
+                implicitWidth: 32
+                implicitHeight: 32
+                radius: Appearance.rounding.small
+                color: Appearance.colors.colLayer2
+                border.width: plusArea.containsMouse ? 2 : 1
+                border.color: plusArea.containsMouse ? Appearance.colors.colPrimary : Appearance.colors.colOutlineVariant
+
+                MaterialSymbol {
+                    anchors.centerIn: parent
+                    text: "add"
+                    iconSize: 18
                     color: Appearance.colors.colOnLayer2
                 }
-                onClicked: {
-                    const n = Math.min(numRow.maxVal, numRow.currentVal + numRow.step);
-                    numRow.changed(n);
+
+                MouseArea {
+                    id: plusArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const n = Math.min(numRow.maxVal, numRow.currentVal + numRow.step);
+                        numRow.changed(n);
+                    }
                 }
             }
         }
+        Item { Layout.fillWidth: true }
     }
 
     component TelemetryRow: RowLayout {
@@ -356,7 +482,7 @@ StyledPopup {
 
         readonly property var popupScreen: contentRoot.QsWindow?.window?.screen ?? root.hoverTarget?.QsWindow?.window?.screen ?? null
         readonly property real sw: (popupScreen && popupScreen.width > 0) ? popupScreen.width : 1920
-        readonly property real calculatedWidth: Math.min(880, Math.max(680, Math.round(sw * 0.45)))
+        readonly property real calculatedWidth: Math.min(1060, Math.max(840, Math.round(sw * 0.50)))
 
         implicitWidth: calculatedWidth
         implicitHeight: mainLayout.implicitHeight
@@ -366,7 +492,7 @@ StyledPopup {
             anchors.fill: parent
             spacing: 12
 
-            // Top Status Banner: State display with colors & pulse matching the bar
+            // Top Status Banner: Concise 1-word status with matching bar color and breathing pulse
             Rectangle {
                 id: statusBanner
                 Layout.fillWidth: true
@@ -400,14 +526,15 @@ StyledPopup {
 
                     Item { Layout.fillWidth: true }
 
+                    // Pure duration display without 5-minute cap or verbose prefixes
                     StyledText {
                         visible: Voice.overallState !== "idle"
                         text: Voice.overallState === "recording"
-                            ? (Voice.formattedRecordedDuration + " / 5:00")
+                            ? Voice.formattedRecordedDuration
                             : (Voice.overallState === "transcribing"
-                                ? ("Decoding " + Voice.formattedTranscribedDuration)
+                                ? Voice.formattedTranscribedDuration
                                 : (Voice.overallState === "typing"
-                                    ? ("Typing " + Voice.formattedRecordedDuration)
+                                    ? Voice.formattedRecordedDuration
                                     : Voice.formattedTotalDuration))
                         font.pixelSize: Appearance.font.pixelSize.small
                         font.family: Appearance.font.family.numbers
@@ -428,14 +555,14 @@ StyledPopup {
                 RippleButtonWithIcon {
                     id: toggleBtn
                     Layout.fillWidth: true
-                    mainText: parent.isRecording ? "Stop Recording" : (parent.isBusy ? root.stateTitle : "Start Recording")
+                    mainText: parent.isRecording ? "Stop" : (parent.isBusy ? root.stateTitle : "Start")
                     materialIcon: parent.isRecording ? "stop" : (parent.isBusy ? "hourglass_top" : "mic")
                     colBackground: parent.isRecording ? Appearance.colors.colPrimaryContainer : (parent.isBusy ? Appearance.colors.colLayer2 : "#1e3a29")
                     enabled: !parent.isBusy
                     opacity: enabled ? 1.0 : 0.6
                     mainContentComponent: Component {
                         StyledText {
-                            text: toggleBtn.parent.isRecording ? "Stop Recording" : (toggleBtn.parent.isBusy ? root.stateTitle : "Start Recording")
+                            text: toggleBtn.parent.isRecording ? "Stop" : (toggleBtn.parent.isBusy ? root.stateTitle : "Start")
                             font.pixelSize: Appearance.font.pixelSize.small
                             font.weight: Font.DemiBold
                             color: toggleBtn.parent.isRecording ? Appearance.colors.colPrimary : (toggleBtn.parent.isBusy ? Appearance.colors.colOnSurfaceVariant : "#4ade80")
@@ -473,7 +600,7 @@ StyledPopup {
             // Body: Side-by-Side Two Column Layout
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 12
+                spacing: 14
 
                 // Left Column: Live Telemetry + Recent Dictations + Open Full Report
                 ColumnLayout {
@@ -556,15 +683,15 @@ StyledPopup {
                                 id: recentFlickable
                                 Layout.fillWidth: true
                                 clip: true
-                                Layout.maximumHeight: 200
-                                implicitHeight: Math.min(200, Math.max(60, recentListCol.implicitHeight))
+                                Layout.maximumHeight: 320
+                                implicitHeight: Math.min(320, Math.max(80, recentListCol.implicitHeight))
                                 contentWidth: width
                                 contentHeight: recentListCol.implicitHeight
 
                                 ColumnLayout {
                                     id: recentListCol
                                     width: parent.width
-                                    spacing: 4
+                                    spacing: 6
 
                                     StyledText {
                                         visible: root.recentRuns.length === 0
@@ -630,10 +757,10 @@ StyledPopup {
                     }
                 }
 
-                // Right Column: Configuration Panel (12 controls)
+                // Right Column: Categorized Configuration Panel (STT, TTS, General)
                 ColumnLayout {
                     Layout.fillWidth: true
-                    Layout.preferredWidth: 420
+                    Layout.preferredWidth: 540
                     Layout.alignment: Qt.AlignTop
                     spacing: 12
 
@@ -644,13 +771,13 @@ StyledPopup {
                         color: Appearance.m3colors.m3surfaceContainerHigh
                         border.width: 1
                         border.color: Appearance.colors.colLayer0Border
-                        implicitHeight: configCol.implicitHeight + 20
+                        implicitHeight: configCol.implicitHeight + 24
 
                         ColumnLayout {
                             id: configCol
                             anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
+                            anchors.margins: 12
+                            spacing: 10
 
                             StyledText {
                                 text: "Configuration"
@@ -659,9 +786,29 @@ StyledPopup {
                                 color: Appearance.colors.colPrimary
                             }
 
-                            ConfigComboRow {
-                                label: "STT Model"
-                                options: ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large-v2", "large-v3"]
+                            // --- Section 1: Speech-to-Text (STT) ---
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                MaterialSymbol {
+                                    text: "mic"
+                                    iconSize: 16
+                                    color: Appearance.colors.colPrimary
+                                }
+                                StyledText {
+                                    text: "Speech-to-Text (STT)"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colOnSurfaceVariant
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
+                            }
+
+                            ConfigModelGridRow {
                                 currentVal: root.userConfig.model
                                 onSelected: val => root.saveConfigValue("model", val)
                             }
@@ -692,15 +839,9 @@ StyledPopup {
                                 minVal: 1.0
                                 maxVal: 30.0
                                 step: 1.0
+                                unit: "s"
                                 currentVal: root.userConfig.chunk_duration || 5.0
                                 onChanged: val => root.saveConfigValue("chunk_duration", val)
-                            }
-
-                            ConfigSelectorRow {
-                                label: "Output Method"
-                                options: ["type", "paste"]
-                                currentVal: root.userConfig.output_method
-                                onSelected: val => root.saveConfigValue("output_method", val)
                             }
 
                             ConfigNumberRow {
@@ -718,17 +859,34 @@ StyledPopup {
                                 onToggled: val => root.saveConfigValue("vad_filter", val)
                             }
 
-                            ConfigSwitchRow {
-                                label: "Audio Cues"
-                                checked: root.userConfig.beep !== false
-                                onToggled: val => root.saveConfigValue("beep", val)
+                            ConfigSelectorRow {
+                                label: "Output Method"
+                                options: ["type", "paste"]
+                                currentVal: root.userConfig.output_method
+                                onSelected: val => root.saveConfigValue("output_method", val)
                             }
 
-                            ConfigComboRow {
-                                label: "TTS Voice"
-                                options: ["af_heart", "af_bella", "af_nicole", "af_sky", "bf_emma", "bf_isabella", "am_adam", "am_michael", "bm_george", "bm_lewis"]
-                                currentVal: root.userConfig.tts_voice || "af_heart"
-                                onSelected: val => root.saveConfigValue("tts_voice", val)
+                            // --- Section 2: Text-to-Speech (TTS) ---
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Layout.topMargin: 4
+                                MaterialSymbol {
+                                    text: "volume_up"
+                                    iconSize: 16
+                                    color: Appearance.colors.colSecondary
+                                }
+                                StyledText {
+                                    text: "Text-to-Speech (TTS)"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colOnSurfaceVariant
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
                             }
 
                             ConfigSelectorRow {
@@ -736,6 +894,40 @@ StyledPopup {
                                 options: ["kokoro", "edge"]
                                 currentVal: root.userConfig.tts_backend || "kokoro"
                                 onSelected: val => root.saveConfigValue("tts_backend", val)
+                            }
+
+                            ConfigVoiceGridRow {
+                                currentVal: root.userConfig.tts_voice || "af_heart"
+                                onSelected: val => root.saveConfigValue("tts_voice", val)
+                            }
+
+                            // --- Section 3: General / Audio ---
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Layout.topMargin: 4
+                                MaterialSymbol {
+                                    text: "tune"
+                                    iconSize: 16
+                                    color: Appearance.colors.colPrimary
+                                }
+                                StyledText {
+                                    text: "General / Audio"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colOnSurfaceVariant
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
+                            }
+
+                            ConfigSwitchRow {
+                                label: "Audio Cues"
+                                checked: root.userConfig.beep !== false
+                                onToggled: val => root.saveConfigValue("beep", val)
                             }
 
                             ConfigSelectorRow {
