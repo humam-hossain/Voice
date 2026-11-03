@@ -404,3 +404,58 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
         pid, state = voice.read_pid_state()
         self.assertEqual(pid, 54321)
         self.assertEqual(state, "transcribing")
+
+    def test_popup_components(self):
+        """POP-01, POP-02: Validate VoicePopup.qml structure, controls, and safety."""
+        popup_paths = [
+            Path("/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePopup.qml"),
+            Path(__file__).parent.parent / "integrations/quickshell/VoicePopup.qml",
+        ]
+
+        expected_config_keys = [
+            "model",
+            "device",
+            "compute_type",
+            "language",
+            "chunk_duration",
+            "output_method",
+            "beam_size",
+            "vad_filter",
+            "beep",
+            "tts_voice",
+            "tts_backend",
+            "capture_corpus",
+        ]
+
+        for p in popup_paths:
+            self.assertTrue(p.is_file(), f"VoicePopup.qml missing at {p}")
+            content = p.read_text(encoding="utf-8")
+
+            # Extends StyledPopup and has 350 width
+            self.assertIn("StyledPopup {", content)
+            self.assertIn("350", content)
+
+            # Array-based Quickshell.execDetached for toggle and cancel
+            self.assertIn('Quickshell.execDetached(["voice", "--toggle"])', content)
+            self.assertIn('Quickshell.execDetached(["voice", "--cancel"])', content)
+
+            # Action button colors
+            self.assertIn("#4ade80", content)  # Start
+            self.assertIn("#f43f5e", content)  # Cancel
+            self.assertIn("colPrimary", content)  # Stop
+
+            # All 12 config keys present in userConfig
+            for key in expected_config_keys:
+                self.assertIn(f"{key}:", content, f"Missing config key {key} in {p}")
+
+            # StyledFlickable with clip: true for recent runs
+            self.assertIn("StyledFlickable {", content)
+            self.assertIn("clip: true", content)
+
+            # Voice.openReport() for report button
+            self.assertIn("Voice.openReport()", content)
+
+            # Zero raw shell or rm invocations
+            self.assertNotIn("sh -c", content)
+            self.assertNotIn("bash -c", content)
+            self.assertNotRegex(content, r"\brm\s+-")
