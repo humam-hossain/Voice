@@ -124,11 +124,10 @@ class TestModelSpecs(unittest.TestCase):
         self.assertIn("modelSpecs:", qml)
         self.assertIn("large-v3-turbo", qml)
         self.assertIn("ModelOptionChip", qml)
-        self.assertIn("modelInfoBox", qml)
+        self.assertIn("modelsCard", qml)
         self.assertIn("updateModelBtn", qml)
         self.assertIn("downloadModelProc", qml)
         self.assertIn("checkModelsProc", qml)
-        self.assertIn("ttsDetailsBox", qml)
 
 
 if __name__ == "__main__":
