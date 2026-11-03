@@ -2543,6 +2543,10 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     r.audio_s for r in results.values()
                     if r and getattr(r, "audio_s", None)
                 )
+                live_chars = sum(
+                    len(r.text) for r in results.values()
+                    if r and getattr(r, "text", None)
+                )
             cur_tot = round(time.monotonic() - t_start, 3)
             if capture_closed.is_set():
                 tot = total_chunks_holder["n"] or max(done, 1)
@@ -2553,6 +2557,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                     segments_done=done,
                     transcribed_audio_s=transcribed_s,
                     total_duration_s=cur_tot,
+                    chars_out=live_chars,
                 )
             else:
                 # Publish incremental transcription progress while still recording
@@ -2743,6 +2748,10 @@ def run_background_recording(args: argparse.Namespace) -> int:
                             r.audio_s for r in results.values()
                             if r and getattr(r, "audio_s", None)
                         )
+                        cur_chars = sum(
+                            len(r.text) for r in results.values()
+                            if r and getattr(r, "text", None)
+                        )
                     tot = total_chunks_holder.get("n") or max(done_now, 1)
                     cur_tot = round(time.monotonic() - t_start, 3)
                     _publish_status(
@@ -2753,6 +2762,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
                         segments_done=done_now,
                         transcribed_audio_s=cur_transcribed,
                         total_duration_s=cur_tot,
+                        chars_out=cur_chars,
                     )
                 except Exception:
                     pass
@@ -2778,7 +2788,7 @@ def run_background_recording(args: argparse.Namespace) -> int:
         if text and args.paste:
             active_stage = "transcript insertion"
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s, chars_out=len(text))
             t_ins_0 = time.monotonic()
             if insert_text(text, args, raise_errors=True):
                 run_state["insert_ms"] = round((time.monotonic() - t_ins_0) * 1000.0, 3)
@@ -2789,12 +2799,12 @@ def run_background_recording(args: argparse.Namespace) -> int:
                 raise RuntimeError("transcript insertion returned an unsuccessful result")
         elif text and not args.paste:
             write_pid_state(pid, "typing")
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s, chars_out=len(text))
         elif text:
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s, chars_out=len(text))
             notify(APP_NAME, "Transcript ready; see log.", args)
         else:
-            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s)
+            _publish_status("typing", "insert", transcribed_audio_s=d, audio_s=d, total_duration_s=final_total_s, chars_out=0)
             notify(APP_NAME, "No speech detected.", args)
         outcome = "partial_success" if (failed_chunks and text) else "success"
         return 0

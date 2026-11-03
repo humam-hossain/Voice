@@ -53,6 +53,7 @@ Singleton {
     property int totalElapsedSeconds: 0
     property string formattedTotalDuration: "0:00"
     property bool typingDurationCaptured: false
+    property int liveCharsOut: 0
     readonly property string defaultReportPath: runtimeDir + "/report.html"
     property string statusReportPath: ""
 
@@ -134,6 +135,7 @@ Singleton {
         formattedTranscribedDuration = "0:00";
         totalElapsedSeconds = 0;
         formattedTotalDuration = "0:00";
+        liveCharsOut = 0;
         statusReportPath = "";
     }
 
@@ -285,6 +287,9 @@ Singleton {
                 root.formattedDuration = root.formattedRecordedDuration;
                 if (st.report_path !== undefined && st.report_path !== null && typeof st.report_path === "string") {
                     root.statusReportPath = st.report_path;
+                }
+                if (st.chars_out !== undefined && st.chars_out !== null && st.chars_out >= 0) {
+                    root.liveCharsOut = st.chars_out;
                 }
             }
         }

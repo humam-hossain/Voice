@@ -151,13 +151,16 @@ StyledPopup {
                 const item = JSON.parse(line);
                 if (!item || typeof item !== "object") continue;
 
-                // Time formatting (e.g. "14:25")
-                let timeStr = "--:--";
+                // Time formatting (e.g. "Nov 3, 2:35 PM")
+                let timeStr = "--";
                 if (item.ts_start) {
                     const d = new Date(item.ts_start * 1000);
-                    const hh = String(d.getHours()).padStart(2, "0");
+                    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                    let h = d.getHours();
+                    const ampm = h >= 12 ? "PM" : "AM";
+                    h = h % 12 || 12;
                     const mm = String(d.getMinutes()).padStart(2, "0");
-                    timeStr = hh + ":" + mm;
+                    timeStr = months[d.getMonth()] + " " + d.getDate() + ", " + h + ":" + mm + " " + ampm;
                 }
 
                 // Audio duration
@@ -740,7 +743,10 @@ StyledPopup {
                             TelemetryRow {
                                 label: "Characters"
                                 value: {
-                                    if (Voice.overallState === "typing") return "Typing...";
+                                    if (Voice.overallState === "recording") return "--";
+                                    if (Voice.overallState === "transcribing" || Voice.overallState === "typing") {
+                                        return Voice.liveCharsOut > 0 ? String(Voice.liveCharsOut) : "--";
+                                    }
                                     if (root.recentRuns.length > 0 && root.recentRuns[0].chars !== "--") {
                                         return root.recentRuns[0].chars;
                                     }
@@ -784,7 +790,7 @@ StyledPopup {
                                     font.pixelSize: Appearance.font.pixelSize.small
                                     font.weight: Font.DemiBold
                                     color: Appearance.colors.colSubtext
-                                    Layout.preferredWidth: 48
+                                    Layout.preferredWidth: 130
                                 }
                                 StyledText {
                                     text: "Audio"
@@ -860,7 +866,7 @@ StyledPopup {
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
                                                 color: Appearance.colors.colOnSurfaceVariant
-                                                Layout.preferredWidth: 48
+                                                Layout.preferredWidth: 130
                                             }
 
                                             // Audio Duration
@@ -930,7 +936,6 @@ StyledPopup {
                                 id: openReportBtn
                                 Layout.fillWidth: true
                                 mainText: "Open Full Report"
-                                materialIcon: "open_in_new"
                                 colBackground: Appearance.colors.colPrimaryContainer
                                 mainContentComponent: Component {
                                     RowLayout {

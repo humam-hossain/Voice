@@ -714,7 +714,7 @@ def with_pid_lock(lock_path: Optional[Path] = None) -> Iterator[None]:
 STATUS_V1_KEYS = [
     "schema", "pid", "run_id", "state", "phase", "started_at", "updated_at",
     "expires_at", "audio_s", "segments", "segments_done", "transcribed_audio_s",
-    "total_duration_s", "report_path",
+    "total_duration_s", "report_path", "chars_out",
 ]
 PID_STATES = ("starting", "recording", "transcribing", "typing", "speaking")
 STATUS_PHASES = ("init", "capture", "finalize", "load", "decode", "insert", "wrap-up")
@@ -725,7 +725,7 @@ STATUS_MAX_BYTES = 1024
 
 def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expires_at=None,
                   audio_s=0.0, segments=0, segments_done=0, transcribed_audio_s=None,
-                  total_duration_s=None, report_path=None, **kwargs):
+                  total_duration_s=None, report_path=None, chars_out=None, **kwargs):
     now = time.time()
     if updated_at is None:
         updated_at = now
@@ -780,6 +780,13 @@ def build_status(*, pid, run_id, state, phase, started_at, updated_at=None, expi
     status["transcribed_audio_s"] = transcribed_audio_s_r
     status["total_duration_s"] = total_duration_s_r
     status["report_path"] = report_path
+    if chars_out is not None:
+        try:
+            status["chars_out"] = int(chars_out)
+        except (TypeError, ValueError):
+            status["chars_out"] = None
+    else:
+        status["chars_out"] = None
     return validate_status(status)
 
 
