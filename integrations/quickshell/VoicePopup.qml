@@ -28,6 +28,40 @@ StyledPopup {
         Quickshell.execDetached([root.voiceBin, "--cancel"]);
     }
 
+    // State Colors & Dynamic Status Banner Mapping (Matching Bar Palette)
+    readonly property color skyBlue: "#38bdf8"
+    readonly property color neonGreen: "#4ade80"
+
+    readonly property color stateColor: {
+        switch (Voice.overallState) {
+            case "recording": return Appearance.colors.colPrimary;
+            case "transcribing": return root.skyBlue;
+            case "typing": return root.neonGreen;
+            case "speaking": return Appearance.colors.colSecondary;
+            case "starting": return Appearance.colors.colPrimary;
+            default: return Appearance.colors.colOnSurfaceVariant;
+        }
+    }
+
+    readonly property string stateTitle: {
+        switch (Voice.overallState) {
+            case "recording": return "Recording Active";
+            case "transcribing": return "Transcribing Audio...";
+            case "typing": return "Typing Output...";
+            case "speaking": return "Speaking...";
+            case "starting": return "Starting...";
+            default: return "Ready / Idle";
+        }
+    }
+
+    property real pulseOpacity: 1.0
+    SequentialAnimation on pulseOpacity {
+        running: Voice.overallState !== "idle"
+        loops: Animation.Infinite
+        NumberAnimation { to: 0.35; duration: 600; easing.type: Easing.InOutSine }
+        NumberAnimation { to: 1.0; duration: 600; easing.type: Easing.InOutSine }
+    }
+
     readonly property string configPath: {
         const xdg = Quickshell.env("XDG_CONFIG_HOME");
         const base = (xdg && xdg.length > 0) ? xdg : (Quickshell.env("HOME") + "/.config");
@@ -303,15 +337,15 @@ StyledPopup {
         Layout.fillWidth: true
         StyledText {
             text: tRow.label
-            font.pixelSize: Appearance.font.pixelSize.smaller
+            font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
         }
         Item { Layout.fillWidth: true }
         StyledText {
             text: tRow.value
-            font.pixelSize: Appearance.font.pixelSize.smaller
+            font.pixelSize: Appearance.font.pixelSize.small
             font.family: Appearance.font.family.numbers
-            font.weight: Font.Medium
+            font.weight: Font.DemiBold
             color: Appearance.colors.colOnLayer1
         }
     }
@@ -332,29 +366,85 @@ StyledPopup {
             anchors.fill: parent
             spacing: 12
 
-            // Top Row: Action Buttons (Unified Toggle Button + Cancel Button)
+            // Top Status Banner: State display with colors & pulse matching the bar
+            Rectangle {
+                id: statusBanner
+                Layout.fillWidth: true
+                radius: Appearance.rounding.small
+                color: Appearance.m3colors.m3surfaceContainerHigh
+                border.width: 1
+                border.color: Appearance.colors.colLayer0Border
+                implicitHeight: 46
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    spacing: 10
+
+                    MaterialSymbol {
+                        iconSize: 22
+                        text: (Voice.overallState === "typing") ? "edit" :
+                              (Voice.overallState === "speaking" ? "volume_up" :
+                              (Voice.overallState === "transcribing" ? "hourglass_top" : "graphic_eq"))
+                        color: root.stateColor
+                        opacity: (Voice.overallState !== "idle") ? root.pulseOpacity : 1.0
+                    }
+
+                    StyledText {
+                        text: root.stateTitle
+                        font.pixelSize: Appearance.font.pixelSize.normal
+                        font.weight: Font.DemiBold
+                        color: root.stateColor
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    StyledText {
+                        visible: Voice.overallState !== "idle"
+                        text: Voice.overallState === "recording"
+                            ? (Voice.formattedRecordedDuration + " / 5:00")
+                            : (Voice.overallState === "transcribing"
+                                ? ("Decoding " + Voice.formattedTranscribedDuration)
+                                : (Voice.overallState === "typing"
+                                    ? ("Typing " + Voice.formattedRecordedDuration)
+                                    : Voice.formattedTotalDuration))
+                        font.pixelSize: Appearance.font.pixelSize.small
+                        font.family: Appearance.font.family.numbers
+                        font.weight: Font.DemiBold
+                        color: root.stateColor
+                    }
+                }
+            }
+
+            // Action Buttons Row (Unified Toggle Button + Cancel Button)
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 10
 
                 readonly property bool isRecording: Voice.overallState === "recording" || Voice.overallState === "starting"
+                readonly property bool isBusy: Voice.overallState === "transcribing" || Voice.overallState === "typing" || Voice.overallState === "speaking"
 
                 RippleButtonWithIcon {
                     id: toggleBtn
                     Layout.fillWidth: true
-                    mainText: parent.isRecording ? "Stop Recording" : "Start Recording"
-                    materialIcon: parent.isRecording ? "stop" : "mic"
-                    colBackground: parent.isRecording ? Appearance.colors.colPrimaryContainer : "#1e3a29"
+                    mainText: parent.isRecording ? "Stop Recording" : (parent.isBusy ? root.stateTitle : "Start Recording")
+                    materialIcon: parent.isRecording ? "stop" : (parent.isBusy ? "hourglass_top" : "mic")
+                    colBackground: parent.isRecording ? Appearance.colors.colPrimaryContainer : (parent.isBusy ? Appearance.colors.colLayer2 : "#1e3a29")
+                    enabled: !parent.isBusy
+                    opacity: enabled ? 1.0 : 0.6
                     mainContentComponent: Component {
                         StyledText {
-                            text: toggleBtn.parent.isRecording ? "Stop Recording" : "Start Recording"
+                            text: toggleBtn.parent.isRecording ? "Stop Recording" : (toggleBtn.parent.isBusy ? root.stateTitle : "Start Recording")
                             font.pixelSize: Appearance.font.pixelSize.small
                             font.weight: Font.DemiBold
-                            color: toggleBtn.parent.isRecording ? Appearance.colors.colPrimary : "#4ade80"
+                            color: toggleBtn.parent.isRecording ? Appearance.colors.colPrimary : (toggleBtn.parent.isBusy ? Appearance.colors.colOnSurfaceVariant : "#4ade80")
                         }
                     }
                     onClicked: {
-                        root.toggleRecording();
+                        if (parent.isRecording || Voice.overallState === "idle") {
+                            root.toggleRecording();
+                        }
                     }
                 }
 
@@ -406,11 +496,11 @@ StyledPopup {
                             id: liveCol
                             anchors.fill: parent
                             anchors.margins: 10
-                            spacing: 6
+                            spacing: 8
 
                             StyledText {
-                                text: "Live Telemetry (" + Voice.overallState.toUpperCase() + ")"
-                                font.pixelSize: Appearance.font.pixelSize.small
+                                text: "Live Telemetry"
+                                font.pixelSize: Appearance.font.pixelSize.normal
                                 font.weight: Font.DemiBold
                                 color: Appearance.colors.colPrimary
                             }
@@ -457,7 +547,7 @@ StyledPopup {
 
                             StyledText {
                                 text: "Recent Dictations"
-                                font.pixelSize: Appearance.font.pixelSize.small
+                                font.pixelSize: Appearance.font.pixelSize.normal
                                 font.weight: Font.DemiBold
                                 color: Appearance.colors.colPrimary
                             }
@@ -479,7 +569,7 @@ StyledPopup {
                                     StyledText {
                                         visible: root.recentRuns.length === 0
                                         text: "No recent runs found."
-                                        font.pixelSize: Appearance.font.pixelSize.smaller
+                                        font.pixelSize: Appearance.font.pixelSize.small
                                         color: Appearance.colors.colSubtext
                                         Layout.alignment: Qt.AlignHCenter
                                     }
@@ -493,21 +583,22 @@ StyledPopup {
                                             spacing: 6
 
                                             MaterialSymbol {
-                                                iconSize: Appearance.font.pixelSize.small
+                                                iconSize: Appearance.font.pixelSize.normal
                                                 text: !runRow.modelData.success ? "close" : (runRow.modelData.outlier ? "warning" : "check")
                                                 color: !runRow.modelData.success ? "#f43f5e" : (runRow.modelData.outlier ? "#f59e0b" : "#4ade80")
                                             }
 
                                             StyledText {
                                                 text: runRow.modelData.duration
-                                                font.pixelSize: Appearance.font.pixelSize.smaller
+                                                font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
+                                                font.weight: Font.DemiBold
                                                 color: Appearance.colors.colOnLayer1
                                             }
 
                                             StyledText {
                                                 text: runRow.modelData.chars + " chars"
-                                                font.pixelSize: Appearance.font.pixelSize.smaller
+                                                font.pixelSize: Appearance.font.pixelSize.small
                                                 color: Appearance.colors.colOnSurfaceVariant
                                             }
 
@@ -515,9 +606,9 @@ StyledPopup {
 
                                             StyledText {
                                                 text: runRow.modelData.rtf
-                                                font.pixelSize: Appearance.font.pixelSize.smaller
+                                                font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
-                                                font.weight: Font.Medium
+                                                font.weight: Font.DemiBold
                                                 color: runRow.modelData.outlier ? "#f59e0b" : Appearance.colors.colOnLayer1
                                             }
                                         }
@@ -563,7 +654,7 @@ StyledPopup {
 
                             StyledText {
                                 text: "Configuration"
-                                font.pixelSize: Appearance.font.pixelSize.small
+                                font.pixelSize: Appearance.font.pixelSize.normal
                                 font.weight: Font.DemiBold
                                 color: Appearance.colors.colPrimary
                             }
