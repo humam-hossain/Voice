@@ -27,16 +27,14 @@ StyledPopup {
         return base + "/voicemode/metrics.jsonl";
     }
 
-    FileView {
-        id: configFile
+    readonly property FileView configFile: FileView {
         path: root.configPath
         printErrors: false
         blockLoading: true
         onFileChanged: root.reloadConfig()
     }
 
-    FileView {
-        id: metricsFile
+    readonly property FileView metricsFile: FileView {
         path: root.metricsPath
         printErrors: false
         blockLoading: true
