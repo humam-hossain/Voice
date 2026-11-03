@@ -31,7 +31,7 @@ v1.0 delivered working push-to-talk dictation and text-to-speech. v1.1 makes tra
 - [x] **Phase 8: Accuracy Report & Click-Through** - Prove the ETA's honesty with offline terminal, CSV, and HTML reports. (completed 2026-10-30)
 - [x] **Phase 9: Quickshell Status Pill Integration** - Replace static labels with dual/triple live progress timers, state-matched glyphs and colors (sky blue for STT, neon green for typing), and report click-through. (completed 2026-11-01)
 - [x] **Phase 10: Accuracy Loop, Portability & Hardening** - Close the improvement loop, capture outliers only on opt-in, and verify the matrix. (completed 2026-11-02)
-- [ ] **Phase 11: Voice Desktop Pop-up UI** - Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry.
+- [x] **Phase 11: Voice Desktop Pop-up UI** - Rich interactive Quickshell overlay popup for voice recording history, settings, and telemetry. (completed 2026-11-03)
 
 ## Phase Details
 
@@ -200,4 +200,4 @@ Phases execute in numeric order: 6 → 7 → 8 → 9 → 10
 | 8. Accuracy Report & Click-Through | v1.1 | 3/3 | Complete    | 2026-10-30 |
 | 9. Quickshell Status Pill Integration | v1.1 | 4/4 | Complete    | 2026-11-02 |
 | 10. Accuracy Loop, Portability & Hardening | v1.1 | 3/3 | Complete    | 2026-11-02 |
-| 11. Voice Desktop Pop-up UI | v1.2 | 2/2 | In Progress|  |
+| 11. Voice Desktop Pop-up UI | v1.2 | 2/2 | Complete    | 2026-11-03 |

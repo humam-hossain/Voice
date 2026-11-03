@@ -33,7 +33,7 @@ key-files:
 key-decisions:
   - "D-01: VoicePopup hoverTarget conditionally binds to pillMouseArea only when state !== recording or popup is already active."
   - "D-02: Left-clicking VoicePill no longer opens report.html directly; full report is accessed via VoicePopup button."
-  - "POP-01/POP-02: Parity verified across ~/.dotfiles and integrations/quickshell/ with zero diff."
+  - "POP-01/POP-02: Parity verified across dotfiles and integrations/quickshell/ with zero diff."
 requirements-completed:
   - "POP-01"
   - "POP-02"
@@ -64,7 +64,7 @@ Connected `VoicePopup.qml` into `VoicePill.qml`, implemented the hover intent tr
    - Embedded `VoicePopup` within `pillMouseArea` with conditional `hoverTarget: (Voice.overallState !== "recording" || active) ? pillMouseArea : null`.
    - Prevented unwanted popup triggers during active recording when the popup is closed, while keeping an already-opened popup active to display live timers.
    - Superseded direct `Voice.openReport()` on pill left-click so clicks are cleanly consumed while report viewing is centralized inside the popup.
-   - Synchronized changes between live dotfiles (`~/.dotfiles/restow/.../VoicePill.qml`) and repository references (`integrations/quickshell/VoicePill.qml`).
+   - Synchronized changes between live dotfiles (`/home/pera/github_repo/.dotfiles/restow/quickshell/.config/quickshell/ii/modules/ii/bar/VoicePill.qml`) and repository references (`integrations/quickshell/VoicePill.qml`).
 
 2. **Simulation & Parity Test Suite (`tests/test_pill_integration_simulation.py`):**
    - Added `test_hover_gating` validating state transitions and hover suppression logic.

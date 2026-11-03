@@ -84,6 +84,11 @@ Committed scope for v1.1. Each maps to exactly one roadmap phase (6–10).
 - [x] **ACC-06**: Evaluation protocol fixed before collecting: median absolute error, p90, signed bias, overrun share, stratified; target ≤20% median absolute error after 20 runs on this machine.
 - [x] **ACC-07**: `docs/telemetry.md` plus README updates; `--doctor` checks ledger/status health and resolved paths.
 
+### Voice Desktop Pop-up UI
+
+- [x] **POP-01**: Desktop popup window opens on hover intent (1000ms delay) or button to inspect recent transcriptions, stage latency details, and runtime status; hover blocked during recording.
+- [x] **POP-02**: 12 interactive settings syncing immediately to user config.json (0700/0600), scalar precedence (CLI > ENV > config.json > default), recent runs reverse JSONL parser, and dotfiles parity.
+
 ## v2 Requirements
 
 Deferred to a future release. Tracked but not in the current roadmap.
@@ -185,11 +190,13 @@ Populated during roadmap creation. Each requirement maps to exactly one phase.
 | ACC-05 | 10 | Complete |
 | ACC-06 | 10 | Complete |
 | ACC-07 | 10 | Complete |
+| POP-01 | 11 | Complete |
+| POP-02 | 11 | Complete |
 
 **Coverage:**
 
-- v1 requirements: 48 total
-- Mapped to phases: 48
+- v1 requirements: 50 total
+- Mapped to phases: 50
 - Unmapped: 0
 
 ---

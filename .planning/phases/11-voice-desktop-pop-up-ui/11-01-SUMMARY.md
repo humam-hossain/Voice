@@ -33,7 +33,7 @@ key-files:
     - "tests/test_pill_integration_simulation.py"
 key-decisions:
   - "D-03/D-04: Action buttons use Start (#4ade80), Stop (colPrimary), and Cancel (#f43f5e) with Quickshell.execDetached."
-  - "D-05/D-06: 12 configuration settings sync immediately to ~/.config/voicemode/config.json with 0600 file and 0700 dir permissions."
+  - "D-05/D-06: 12 configuration settings sync immediately to user config.json with 0600 file and 0700 dir permissions."
   - "D-07/D-08/D-09/D-10: Live state telemetry, recent runs inside StyledFlickable with reverse JSONL parser, and Open Full Report button."
 requirements-completed:
   - "POP-01"
@@ -75,7 +75,7 @@ Implemented the persistent configuration subsystem in `voice.py`, unit test suit
    - Built `VoicePopup.qml` extending `StyledPopup` (width 350px) in both `integrations/quickshell/` and `.dotfiles`.
    - Provided instant action buttons: Start (`#4ade80`), Stop (`colPrimary`), Cancel (`#f43f5e`) via array-based `Quickshell.execDetached`.
    - Provided real-time live telemetry display for recorded duration, transcribed audio, total duration, and character count.
-   - Provided 12 interactive configuration controls immediately syncing to `~/.config/voicemode/config.json`.
+   - Provided 12 interactive configuration controls immediately syncing to user config JSON (`config.json`).
    - Provided scrollable recent runs card using `StyledFlickable` parsing `metrics.jsonl` in stable reverse chronological order and an "Open Full Report" button invoking `Voice.openReport()`.
 
 ## Verification Results
