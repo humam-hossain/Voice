@@ -51,10 +51,21 @@ def parse_recent_runs_simulation(text: str, max_count: int = 10) -> list[dict]:
                 continue
             audio_s = item.get("audio_s")
             rtf_val = item.get("rtf")
-            is_failed = item.get("failed") is True or bool(item.get("failure_reason"))
-            is_outlier = bool(item.get("is_outlier"))
+            if rtf_val is None and item.get("actual", {}).get("decode_ms") is not None and audio_s and float(audio_s) > 0:
+                rtf_val = (float(item["actual"]["decode_ms"]) / 1000.0) / float(audio_s)
+
+            outcome = item.get("outcome") or ("failed" if item.get("failed") is True or bool(item.get("failure_reason")) else "success")
+            is_cancelled = outcome == "cancelled"
+            is_failed = outcome in ("failed", "error") or item.get("failed") is True or bool(item.get("failure_reason"))
+            is_outlier = bool(item.get("is_outlier") or item.get("outlier"))
             duration_str = f"{float(audio_s):.1f}s" if audio_s is not None else "--"
-            chars_str = str(item.get("characters")) if item.get("characters") is not None else "--"
+
+            char_val = item.get("chars_out") if item.get("chars_out") is not None else (
+                item.get("chars_typed") if item.get("chars_typed") is not None else (
+                    item.get("chars") if item.get("chars") is not None else item.get("characters")
+                )
+            )
+            chars_str = str(char_val) if char_val is not None else "--"
             rtf_str = f"{float(rtf_val):.2f}x" if rtf_val is not None else "--"
             result.append({
                 "runId": item.get("run_id", ""),
@@ -62,8 +73,10 @@ def parse_recent_runs_simulation(text: str, max_count: int = 10) -> list[dict]:
                 "chars": chars_str,
                 "rtf": rtf_str,
                 "outlier": is_outlier,
-                "success": not is_failed,
-                "outcome": item.get("outcome") or ("failed" if is_failed else "success"),
+                "isCancelled": is_cancelled,
+                "isFailed": is_failed,
+                "success": not is_cancelled and not is_failed,
+                "outcome": outcome,
             })
             if len(result) >= max_count:
                 break

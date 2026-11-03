@@ -22,15 +22,19 @@ class TempXdgTestCase(unittest.TestCase):
         self.xdg_root = Path(self._temp_dir.name)
         self.run_dir = self.xdg_root / "run"
         self.state_dir = self.xdg_root / "state"
+        self.config_dir = self.xdg_root / "config"
         self.run_dir.mkdir(parents=True)
         self.state_dir.mkdir(parents=True)
+        self.config_dir.mkdir(parents=True)
         (self.run_dir / "voice-stt").mkdir(parents=True)
+        (self.config_dir / "voicemode").mkdir(parents=True)
         
         import voice
         
         self._env_patch = patch.dict(os.environ, {
             "XDG_RUNTIME_DIR": str(self.run_dir),
             "XDG_STATE_HOME": str(self.state_dir),
+            "XDG_CONFIG_HOME": str(self.config_dir),
         })
         self._env_patch.start()
         

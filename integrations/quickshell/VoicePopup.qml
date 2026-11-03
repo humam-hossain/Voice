@@ -150,18 +150,56 @@ StyledPopup {
             try {
                 const item = JSON.parse(line);
                 if (!item || typeof item !== "object") continue;
+
+                // Time formatting (e.g. "14:25")
+                let timeStr = "--:--";
+                if (item.ts_start) {
+                    const d = new Date(item.ts_start * 1000);
+                    const hh = String(d.getHours()).padStart(2, "0");
+                    const mm = String(d.getMinutes()).padStart(2, "0");
+                    timeStr = hh + ":" + mm;
+                }
+
+                // Audio duration
                 const audioSec = (item.audio_s !== undefined && item.audio_s !== null) ? Number(item.audio_s) : null;
-                const rtfVal = (item.rtf !== undefined && item.rtf !== null) ? Number(item.rtf) : null;
-                const isFailed = item.failed === true || (item.failure_reason && item.failure_reason !== "");
-                const isOutlier = Boolean(item.is_outlier);
+                const durationStr = audioSec !== null ? (audioSec.toFixed(1) + "s") : "--";
+
+                // Characters: support chars_out, chars_typed, chars, characters
+                const charVal = (item.chars_out !== undefined && item.chars_out !== null)
+                    ? item.chars_out
+                    : ((item.chars_typed !== undefined && item.chars_typed !== null)
+                        ? item.chars_typed
+                        : ((item.chars !== undefined && item.chars !== null)
+                            ? item.chars
+                            : ((item.characters !== undefined && item.characters !== null) ? item.characters : null)));
+                const charsStr = charVal !== null ? String(charVal) : "--";
+
+                // RTF calculation
+                let rtfVal = null;
+                if (item.rtf !== undefined && item.rtf !== null) {
+                    rtfVal = Number(item.rtf);
+                } else if (item.actual && item.actual.decode_ms !== null && audioSec !== null && audioSec > 0) {
+                    rtfVal = (Number(item.actual.decode_ms) / 1000.0) / audioSec;
+                }
+                const rtfStr = rtfVal !== null ? (rtfVal.toFixed(2) + "x") : "--";
+
+                // Outcome / Status
+                const outcome = item.outcome || (item.failed ? "failed" : "success");
+                const isCancelled = outcome === "cancelled";
+                const isFailed = outcome === "failed" || outcome === "error" || item.failed === true || Boolean(item.failure_reason);
+                const isOutlier = Boolean(item.outlier || item.is_outlier);
+
                 result.push({
                     runId: item.run_id || "",
-                    duration: audioSec !== null ? (audioSec.toFixed(1) + "s") : "--",
-                    chars: item.characters !== undefined && item.characters !== null ? String(item.characters) : "--",
-                    rtf: rtfVal !== null ? (rtfVal.toFixed(2) + "x") : "--",
+                    time: timeStr,
+                    duration: durationStr,
+                    chars: charsStr,
+                    rtf: rtfStr,
                     outlier: isOutlier,
-                    success: !isFailed,
-                    outcome: item.outcome || (isFailed ? "failed" : "success")
+                    isCancelled: isCancelled,
+                    isFailed: isFailed,
+                    success: !isCancelled && !isFailed,
+                    outcome: outcome
                 });
             } catch (e) {
                 // gracefully skip corrupted entries
@@ -701,9 +739,13 @@ StyledPopup {
 
                             TelemetryRow {
                                 label: "Characters"
-                                value: (root.recentRuns.length > 0 && Voice.overallState === "idle")
-                                    ? root.recentRuns[0].chars
-                                    : (Voice.overallState === "typing" ? "Typing..." : "--")
+                                value: {
+                                    if (Voice.overallState === "typing") return "Typing...";
+                                    if (root.recentRuns.length > 0 && root.recentRuns[0].chars !== "--") {
+                                        return root.recentRuns[0].chars;
+                                    }
+                                    return "--";
+                                }
                             }
                         }
                     }
@@ -729,6 +771,57 @@ StyledPopup {
                                 font.pixelSize: Appearance.font.pixelSize.normal
                                 font.weight: Font.DemiBold
                                 color: Appearance.colors.colPrimary
+                            }
+
+                            // Table Column Headers
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Layout.topMargin: 2
+
+                                StyledText {
+                                    text: "Time"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colSubtext
+                                    Layout.preferredWidth: 48
+                                }
+                                StyledText {
+                                    text: "Audio"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colSubtext
+                                    Layout.preferredWidth: 54
+                                }
+                                StyledText {
+                                    text: "Chars"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colSubtext
+                                    Layout.preferredWidth: 52
+                                }
+                                StyledText {
+                                    text: "RTF"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colSubtext
+                                    Layout.preferredWidth: 52
+                                }
+                                Item { Layout.fillWidth: true }
+                                StyledText {
+                                    text: "Status"
+                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.weight: Font.DemiBold
+                                    color: Appearance.colors.colSubtext
+                                    Layout.preferredWidth: 70
+                                    horizontalAlignment: Text.AlignRight
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 1
+                                color: Appearance.colors.colLayer0Border
                             }
 
                             StyledFlickable {
@@ -759,36 +852,74 @@ StyledPopup {
                                             id: runRow
                                             required property var modelData
                                             Layout.fillWidth: true
-                                            spacing: 6
+                                            spacing: 8
 
-                                            MaterialSymbol {
-                                                iconSize: Appearance.font.pixelSize.normal
-                                                text: !runRow.modelData.success ? "close" : (runRow.modelData.outlier ? "warning" : "check")
-                                                color: !runRow.modelData.success ? "#f43f5e" : (runRow.modelData.outlier ? "#f59e0b" : "#4ade80")
+                                            // Time
+                                            StyledText {
+                                                text: runRow.modelData.time
+                                                font.pixelSize: Appearance.font.pixelSize.small
+                                                font.family: Appearance.font.family.numbers
+                                                color: Appearance.colors.colOnSurfaceVariant
+                                                Layout.preferredWidth: 48
                                             }
 
+                                            // Audio Duration
                                             StyledText {
                                                 text: runRow.modelData.duration
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
-                                                font.weight: Font.DemiBold
+                                                font.weight: Font.Medium
                                                 color: Appearance.colors.colOnLayer1
+                                                Layout.preferredWidth: 54
                                             }
 
+                                            // Chars
                                             StyledText {
-                                                text: runRow.modelData.chars + " chars"
+                                                text: runRow.modelData.chars
                                                 font.pixelSize: Appearance.font.pixelSize.small
+                                                font.family: Appearance.font.family.numbers
                                                 color: Appearance.colors.colOnSurfaceVariant
+                                                Layout.preferredWidth: 52
                                             }
 
-                                            Item { Layout.fillWidth: true }
-
+                                            // RTF
                                             StyledText {
                                                 text: runRow.modelData.rtf
                                                 font.pixelSize: Appearance.font.pixelSize.small
                                                 font.family: Appearance.font.family.numbers
-                                                font.weight: Font.DemiBold
+                                                font.weight: Font.Medium
                                                 color: runRow.modelData.outlier ? "#f59e0b" : Appearance.colors.colOnLayer1
+                                                Layout.preferredWidth: 52
+                                            }
+
+                                            Item { Layout.fillWidth: true }
+
+                                            // Status with Icon and Text
+                                            RowLayout {
+                                                Layout.preferredWidth: 70
+                                                spacing: 4
+                                                Layout.alignment: Qt.AlignRight
+
+                                                MaterialSymbol {
+                                                    iconSize: 15
+                                                    text: runRow.modelData.isCancelled ? "close" :
+                                                          (runRow.modelData.isFailed ? "error" :
+                                                          (runRow.modelData.outlier ? "warning" : "check"))
+                                                    color: runRow.modelData.isCancelled ? "#f43f5e" :
+                                                           (runRow.modelData.isFailed ? "#f43f5e" :
+                                                           (runRow.modelData.outlier ? "#f59e0b" : "#4ade80"))
+                                                }
+
+                                                StyledText {
+                                                    text: runRow.modelData.isCancelled ? "cancelled" :
+                                                          (runRow.modelData.isFailed ? "error" :
+                                                          (runRow.modelData.outlier ? "outlier" : "ok"))
+                                                    font.pixelSize: Appearance.font.pixelSize.smaller
+                                                    font.weight: Font.Medium
+                                                    color: runRow.modelData.isCancelled ? "#f43f5e" :
+                                                           (runRow.modelData.isFailed ? "#f43f5e" :
+                                                           (runRow.modelData.outlier ? "#f59e0b" : "#4ade80"))
+                                                }
                                             }
                                         }
                                     }
@@ -800,7 +931,23 @@ StyledPopup {
                                 Layout.fillWidth: true
                                 mainText: "Open Full Report"
                                 materialIcon: "open_in_new"
-                                colBackground: Appearance.colors.colLayer2
+                                colBackground: Appearance.colors.colPrimaryContainer
+                                mainContentComponent: Component {
+                                    RowLayout {
+                                        spacing: 8
+                                        MaterialSymbol {
+                                            text: "open_in_new"
+                                            iconSize: 18
+                                            color: Appearance.colors.colPrimary
+                                        }
+                                        StyledText {
+                                            text: "Open Full Report"
+                                            font.pixelSize: Appearance.font.pixelSize.small
+                                            font.weight: Font.DemiBold
+                                            color: Appearance.colors.colPrimary
+                                        }
+                                    }
+                                }
                                 onClicked: {
                                     Voice.openReport();
                                 }
