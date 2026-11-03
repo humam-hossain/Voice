@@ -226,16 +226,18 @@ StyledPopup {
         property bool checked: false
         signal toggled(bool val)
         Layout.fillWidth: true
+        spacing: 12
         StyledText {
             text: switchRow.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.fillWidth: true
+            Layout.preferredWidth: 125
         }
         StyledSwitch {
             checked: switchRow.checked
             onToggled: switchRow.toggled(checked)
         }
+        Item { Layout.fillWidth: true }
     }
 
     component ConfigSelectorRow: RowLayout {
@@ -250,7 +252,7 @@ StyledPopup {
             text: selRow.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.preferredWidth: 120
+            Layout.preferredWidth: 125
         }
         RowLayout {
             spacing: 6
@@ -267,94 +269,144 @@ StyledPopup {
         Item { Layout.fillWidth: true }
     }
 
-    // Inline 2-row grid for STT models (completely eliminates external dropdown hover-loss)
-    component ConfigModelGridRow: ColumnLayout {
+    // Inline 3-row grid for STT models: strictly preserves 2-column alignment
+    component ConfigModelGridRow: RowLayout {
         id: modelGrid
         property string label: "STT Model"
         property var currentVal: ""
         signal selected(var val)
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 12
 
         StyledText {
             text: modelGrid.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
+            Layout.preferredWidth: 125
+            Layout.alignment: Qt.AlignTop
+            Layout.topMargin: 6
         }
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
             spacing: 6
-            Repeater {
-                model: ["tiny", "tiny.en", "base", "base.en", "small"]
-                delegate: OptionChip {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData
-                    selected: modelGrid.currentVal === modelData
-                    onClicked: modelGrid.selected(modelData)
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["tiny", "tiny.en", "base", "base.en"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: modelGrid.currentVal === modelData
+                        onClicked: modelGrid.selected(modelData)
+                    }
                 }
             }
-        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-            Repeater {
-                model: ["small.en", "medium", "medium.en", "large-v2", "large-v3"]
-                delegate: OptionChip {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData
-                    selected: modelGrid.currentVal === modelData
-                    onClicked: modelGrid.selected(modelData)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["small", "small.en", "medium", "medium.en"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: modelGrid.currentVal === modelData
+                        onClicked: modelGrid.selected(modelData)
+                    }
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["large-v2", "large-v3"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: modelGrid.currentVal === modelData
+                        onClicked: modelGrid.selected(modelData)
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Item { Layout.fillWidth: true }
             }
         }
     }
 
-    // Inline 2-row grid for TTS voices (completely eliminates external dropdown hover-loss)
-    component ConfigVoiceGridRow: ColumnLayout {
+    // Inline 3-row grid for TTS voices: strictly preserves 2-column alignment
+    component ConfigVoiceGridRow: RowLayout {
         id: voiceGrid
         property string label: "TTS Voice"
         property var currentVal: ""
         signal selected(var val)
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 12
 
         StyledText {
             text: voiceGrid.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
+            Layout.preferredWidth: 125
+            Layout.alignment: Qt.AlignTop
+            Layout.topMargin: 6
         }
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
             spacing: 6
-            Repeater {
-                model: ["af_heart", "af_bella", "af_nicole", "af_sky", "bf_emma", "bf_isabella"]
-                delegate: OptionChip {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData
-                    selected: voiceGrid.currentVal === modelData
-                    onClicked: voiceGrid.selected(modelData)
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["af_heart", "af_bella", "af_nicole", "af_sky"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: voiceGrid.currentVal === modelData
+                        onClicked: voiceGrid.selected(modelData)
+                    }
                 }
             }
-        }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-            Repeater {
-                model: ["am_adam", "am_michael", "bm_george", "bm_lewis"]
-                delegate: OptionChip {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    text: modelData
-                    selected: voiceGrid.currentVal === modelData
-                    onClicked: voiceGrid.selected(modelData)
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["bf_emma", "bf_isabella", "am_adam", "am_michael"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: voiceGrid.currentVal === modelData
+                        onClicked: voiceGrid.selected(modelData)
+                    }
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: ["bm_george", "bm_lewis"]
+                    delegate: OptionChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData
+                        selected: voiceGrid.currentVal === modelData
+                        onClicked: voiceGrid.selected(modelData)
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Item { Layout.fillWidth: true }
             }
         }
     }
@@ -375,7 +427,7 @@ StyledPopup {
             text: numRow.label
             font.pixelSize: Appearance.font.pixelSize.small
             color: Appearance.colors.colOnSurfaceVariant
-            Layout.preferredWidth: 120
+            Layout.preferredWidth: 125
         }
 
         RowLayout {
@@ -555,14 +607,14 @@ StyledPopup {
                 RippleButtonWithIcon {
                     id: toggleBtn
                     Layout.fillWidth: true
-                    mainText: parent.isRecording ? "Stop" : (parent.isBusy ? root.stateTitle : "Start")
-                    materialIcon: parent.isRecording ? "stop" : (parent.isBusy ? "hourglass_top" : "mic")
+                    mainText: parent.isRecording ? "Stop" : "Start"
+                    materialIcon: parent.isRecording ? "stop" : "mic"
                     colBackground: parent.isRecording ? Appearance.colors.colPrimaryContainer : (parent.isBusy ? Appearance.colors.colLayer2 : "#1e3a29")
-                    enabled: !parent.isBusy
-                    opacity: enabled ? 1.0 : 0.6
+                    enabled: !parent.isBusy && (parent.isRecording || Voice.overallState === "idle")
+                    opacity: enabled ? 1.0 : 0.5
                     mainContentComponent: Component {
                         StyledText {
-                            text: toggleBtn.parent.isRecording ? "Stop" : (toggleBtn.parent.isBusy ? root.stateTitle : "Start")
+                            text: toggleBtn.parent.isRecording ? "Stop" : "Start"
                             font.pixelSize: Appearance.font.pixelSize.small
                             font.weight: Font.DemiBold
                             color: toggleBtn.parent.isRecording ? Appearance.colors.colPrimary : (toggleBtn.parent.isBusy ? Appearance.colors.colOnSurfaceVariant : "#4ade80")
@@ -757,49 +809,94 @@ StyledPopup {
                     }
                 }
 
-                // Right Column: Categorized Configuration Panel (STT, TTS, General)
+                // Right Column: Categorized Configuration (3 Distinct Boxes: General, STT, TTS)
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 540
                     Layout.alignment: Qt.AlignTop
                     spacing: 12
 
+                    // --- Box 1: General / Audio (Top) ---
                     Rectangle {
-                        id: configCard
+                        id: generalCard
                         Layout.fillWidth: true
                         radius: Appearance.rounding.small
                         color: Appearance.m3colors.m3surfaceContainerHigh
                         border.width: 1
                         border.color: Appearance.colors.colLayer0Border
-                        implicitHeight: configCol.implicitHeight + 24
+                        implicitHeight: generalCol.implicitHeight + 20
 
                         ColumnLayout {
-                            id: configCol
+                            id: generalCol
                             anchors.fill: parent
                             anchors.margins: 12
                             spacing: 10
 
-                            StyledText {
-                                text: "Configuration"
-                                font.pixelSize: Appearance.font.pixelSize.normal
-                                font.weight: Font.DemiBold
-                                color: Appearance.colors.colPrimary
-                            }
-
-                            // --- Section 1: Speech-to-Text (STT) ---
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 6
+                                spacing: 8
                                 MaterialSymbol {
-                                    text: "mic"
-                                    iconSize: 16
+                                    text: "tune"
+                                    iconSize: 18
                                     color: Appearance.colors.colPrimary
                                 }
                                 StyledText {
-                                    text: "Speech-to-Text (STT)"
-                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    text: "General / Audio"
+                                    font.pixelSize: Appearance.font.pixelSize.normal
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colOnSurfaceVariant
+                                    color: Appearance.colors.colPrimary
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    color: Appearance.colors.colLayer0Border
+                                }
+                            }
+
+                            ConfigSwitchRow {
+                                label: "Audio Cues"
+                                checked: root.userConfig.beep !== false
+                                onToggled: val => root.saveConfigValue("beep", val)
+                            }
+
+                            ConfigSelectorRow {
+                                label: "Corpus Capture"
+                                options: ["none", "outliers", "all"]
+                                currentVal: root.userConfig.capture_corpus || "none"
+                                onSelected: val => root.saveConfigValue("capture_corpus", val)
+                            }
+                        }
+                    }
+
+                    // --- Box 2: Speech-to-Text (STT) (Middle) ---
+                    Rectangle {
+                        id: sttCard
+                        Layout.fillWidth: true
+                        radius: Appearance.rounding.small
+                        color: Appearance.m3colors.m3surfaceContainerHigh
+                        border.width: 1
+                        border.color: Appearance.colors.colLayer0Border
+                        implicitHeight: sttCol.implicitHeight + 20
+
+                        ColumnLayout {
+                            id: sttCol
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                MaterialSymbol {
+                                    text: "mic"
+                                    iconSize: 18
+                                    color: root.skyBlue
+                                }
+                                StyledText {
+                                    text: "Speech-to-Text (STT)"
+                                    font.pixelSize: Appearance.font.pixelSize.normal
+                                    font.weight: Font.DemiBold
+                                    color: root.skyBlue
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true
@@ -859,28 +956,43 @@ StyledPopup {
                                 onToggled: val => root.saveConfigValue("vad_filter", val)
                             }
 
-                            ConfigSelectorRow {
-                                label: "Output Method"
-                                options: ["type", "paste"]
-                                currentVal: root.userConfig.output_method
-                                onSelected: val => root.saveConfigValue("output_method", val)
+                            ConfigSwitchRow {
+                                label: "Auto-Type"
+                                checked: root.userConfig.output_method !== "clipboard"
+                                onToggled: val => root.saveConfigValue("output_method", val ? "type" : "clipboard")
                             }
+                        }
+                    }
 
-                            // --- Section 2: Text-to-Speech (TTS) ---
+                    // --- Box 3: Text-to-Speech (TTS) (Bottom) ---
+                    Rectangle {
+                        id: ttsCard
+                        Layout.fillWidth: true
+                        radius: Appearance.rounding.small
+                        color: Appearance.m3colors.m3surfaceContainerHigh
+                        border.width: 1
+                        border.color: Appearance.colors.colLayer0Border
+                        implicitHeight: ttsCol.implicitHeight + 20
+
+                        ColumnLayout {
+                            id: ttsCol
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 6
-                                Layout.topMargin: 4
+                                spacing: 8
                                 MaterialSymbol {
                                     text: "volume_up"
-                                    iconSize: 16
+                                    iconSize: 18
                                     color: Appearance.colors.colSecondary
                                 }
                                 StyledText {
                                     text: "Text-to-Speech (TTS)"
-                                    font.pixelSize: Appearance.font.pixelSize.small
+                                    font.pixelSize: Appearance.font.pixelSize.normal
                                     font.weight: Font.DemiBold
-                                    color: Appearance.colors.colOnSurfaceVariant
+                                    color: Appearance.colors.colSecondary
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true
@@ -899,42 +1011,6 @@ StyledPopup {
                             ConfigVoiceGridRow {
                                 currentVal: root.userConfig.tts_voice || "af_heart"
                                 onSelected: val => root.saveConfigValue("tts_voice", val)
-                            }
-
-                            // --- Section 3: General / Audio ---
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-                                Layout.topMargin: 4
-                                MaterialSymbol {
-                                    text: "tune"
-                                    iconSize: 16
-                                    color: Appearance.colors.colPrimary
-                                }
-                                StyledText {
-                                    text: "General / Audio"
-                                    font.pixelSize: Appearance.font.pixelSize.small
-                                    font.weight: Font.DemiBold
-                                    color: Appearance.colors.colOnSurfaceVariant
-                                }
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    height: 1
-                                    color: Appearance.colors.colLayer0Border
-                                }
-                            }
-
-                            ConfigSwitchRow {
-                                label: "Audio Cues"
-                                checked: root.userConfig.beep !== false
-                                onToggled: val => root.saveConfigValue("beep", val)
-                            }
-
-                            ConfigSelectorRow {
-                                label: "Corpus Capture"
-                                options: ["none", "outliers", "all"]
-                                currentVal: root.userConfig.capture_corpus || "none"
-                                onSelected: val => root.saveConfigValue("capture_corpus", val)
                             }
                         }
                     }
