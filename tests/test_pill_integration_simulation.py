@@ -591,3 +591,127 @@ class TestPillIntegrationSimulation(TempXdgTestCase):
         self.assertEqual(len(res_mixed), 2)
         self.assertEqual(res_mixed[0]["runId"], "valid2")
         self.assertEqual(res_mixed[1]["runId"], "valid1")
+
+    def test_status_bar_timing_metrics_retention_after_transcription(self):
+        """Verify status bar timing metrics never display 0:00 after recording/transcription."""
+        voice_path = Path("integrations/quickshell/Voice.qml")
+        pill_path = Path("integrations/quickshell/VoicePill.qml")
+        voice_text = voice_path.read_text(encoding="utf-8")
+        pill_text = pill_path.read_text(encoding="utf-8")
+
+        # 1. Voice.qml must not wipe durations when typing linger expires or on idle poll
+        self.assertNotIn(
+            "onTriggered: {\n            if (root.sttState === \"typing\") {\n                root.sttState = \"idle\";\n                root.resetDuration();",
+            voice_text,
+            "Voice.qml typingLingerTimer must not wipe durations on trigger",
+        )
+        self.assertNotIn(
+            "if (root.sttState === \"idle\" && root.ttsState === \"idle\" && !typingLingerTimer.running) {\n            root.resetDuration();",
+            voice_text,
+            "Voice.qml idle branch must not wipe durations every poll cycle",
+        )
+
+        # 2. VoicePill.qml must declare cache properties for transcribed and total durations
+        self.assertIn("property string lastRecordedDuration: \"0:00\"", pill_text)
+        self.assertIn("property string lastTranscribedDuration: \"0:00\"", pill_text)
+        self.assertIn("property string lastTotalDuration: \"0:00\"", pill_text)
+
+        # 3. VoicePill.qml wrapup display must fall back to cached durations
+        self.assertIn("case \"wrapup\":", pill_text)
+        self.assertIn("root.lastRecordedDuration", pill_text)
+        self.assertIn("root.lastTranscribedDuration", pill_text)
+        self.assertIn("root.lastTotalDuration", pill_text)
+
+        # 4. Simulation of Voice + VoicePill state machine during wrap-up
+        class SimulatedVoicePill:
+            def __init__(self):
+                self.overallState = "idle"
+                self.previousState = "idle"
+                self.formattedRecordedDuration = "0:00"
+                self.formattedTranscribedDuration = "0:00"
+                self.formattedTotalDuration = "0:00"
+                self.lastRecordedDuration = "0:00"
+                self.lastTranscribedDuration = "0:00"
+                self.lastTotalDuration = "0:00"
+                self.inWrapUp = False
+
+            def onOverallStateChanged(self, new_state: str):
+                self.overallState = new_state
+                if self.overallState in ("recording", "starting", "speaking"):
+                    self.inWrapUp = False
+                    self.lastRecordedDuration = "0:00"
+                    self.lastTranscribedDuration = "0:00"
+                    self.lastTotalDuration = "0:00"
+                elif self.overallState == "idle":
+                    if self.previousState in ("typing", "speaking"):
+                        self.inWrapUp = True
+                    else:
+                        self.inWrapUp = False
+                else:
+                    self.inWrapUp = False
+                self.previousState = self.overallState
+
+            def updateDurations(self, rec: str, trans: str, tot: str):
+                self.formattedRecordedDuration = rec
+                self.formattedTranscribedDuration = trans
+                self.formattedTotalDuration = tot
+                if rec != "0:00":
+                    self.lastRecordedDuration = rec
+                if trans != "0:00":
+                    self.lastTranscribedDuration = trans
+                if tot != "0:00":
+                    self.lastTotalDuration = tot
+
+            @property
+            def effectiveState(self):
+                if self.overallState in ("recording", "starting", "speaking"):
+                    return self.overallState
+                if self.inWrapUp:
+                    return "wrapup"
+                return self.overallState
+
+            @property
+            def displayText(self):
+                st = self.effectiveState
+                if st == "recording":
+                    return f"{self.formattedRecordedDuration} | {self.formattedTranscribedDuration}"
+                elif st in ("transcribing", "typing"):
+                    return f"{self.formattedRecordedDuration} | {self.formattedTranscribedDuration} | {self.formattedTotalDuration}"
+                elif st == "wrapup":
+                    r = self.formattedRecordedDuration if self.formattedRecordedDuration != "0:00" else self.lastRecordedDuration
+                    tr = self.formattedTranscribedDuration if self.formattedTranscribedDuration != "0:00" else self.lastTranscribedDuration
+                    tot = self.formattedTotalDuration if self.formattedTotalDuration != "0:00" else self.lastTotalDuration
+                    return f"{r} | {tr} | {tot}"
+                return ""
+
+        sim_pill = SimulatedVoicePill()
+        # Step A: Recording begins
+        sim_pill.onOverallStateChanged("recording")
+        sim_pill.updateDurations("0:05", "0:02", "0:05")
+        self.assertEqual(sim_pill.displayText, "0:05 | 0:02")
+
+        # Step B: Transcribing finishes
+        sim_pill.onOverallStateChanged("transcribing")
+        sim_pill.updateDurations("0:05", "0:05", "0:06")
+        self.assertEqual(sim_pill.displayText, "0:05 | 0:05 | 0:06")
+
+        # Step C: Typing & Linger
+        sim_pill.onOverallStateChanged("typing")
+        self.assertEqual(sim_pill.displayText, "0:05 | 0:05 | 0:06")
+
+        # Step D: Voice transitions to idle (process exit, status removed, typingLingerTimer ends)
+        # Even if Voice resets formatted durations to 0:00, wrapup MUST NOT display 0:00 | 0:00 | 0:00!
+        sim_pill.updateDurations("0:00", "0:00", "0:00")
+        sim_pill.onOverallStateChanged("idle")
+        self.assertEqual(sim_pill.effectiveState, "wrapup")
+        self.assertEqual(
+            sim_pill.displayText,
+            "0:05 | 0:05 | 0:06",
+            "Wrap-up display must retain non-zero completed metrics instead of displaying 0:00",
+        )
+
+        # Step E: Next recording session resets metrics
+        sim_pill.onOverallStateChanged("recording")
+        self.assertEqual(sim_pill.effectiveState, "recording")
+        self.assertEqual(sim_pill.displayText, "0:00 | 0:00")
+

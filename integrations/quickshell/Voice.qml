@@ -118,7 +118,6 @@ Singleton {
         onTriggered: {
             if (root.sttState === "typing") {
                 root.sttState = "idle";
-                root.resetDuration();
             }
         }
     }
@@ -193,7 +192,6 @@ Singleton {
                     sttStatFile.reload();
                     const procAlive = sttStatFile.text().trim().length > 0;
                     if (!procAlive) {
-                        root.sttPid = 0;
                         if (root.sttState === "transcribing") {
                             root.sttState = "typing";
                             typingLingerTimer.restart();
@@ -203,7 +201,9 @@ Singleton {
                     }
                 } else {
                     root.sttPid = pid;
-                    root.resetDuration();
+                    if (rawState === "recording" || rawState === "starting") {
+                        root.resetDuration();
+                    }
                 }
 
                 if (root.sttPid > 0) {
@@ -333,10 +333,7 @@ Singleton {
             root.ttsPid = 0;
         }
 
-        // Reset durations when idle and not lingering
-        if (root.sttState === "idle" && root.ttsState === "idle" && !typingLingerTimer.running) {
-            root.resetDuration();
-        }
+        // Preserve final telemetry durations while idle; reset occurs when a new session starts
     }
 
     Timer {

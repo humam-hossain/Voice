@@ -17,6 +17,8 @@ BarGroup {
     // Internal State Tracking
     property string previousState: "idle"
     property string lastRecordedDuration: "0:00"
+    property string lastTranscribedDuration: "0:00"
+    property string lastTotalDuration: "0:00"
     readonly property bool inWrapUp: wrapUpTimer.running
 
     // Colors & Concurrent Decode Indicator (D-06, D-07, D-08)
@@ -74,10 +76,13 @@ BarGroup {
                 return Voice.formattedRecordedDuration + " | " + Voice.formattedTranscribedDuration;
             case "transcribing":
             case "typing":
-            case "wrapup":
                 return Voice.formattedRecordedDuration + " | " + Voice.formattedTranscribedDuration + " | " + Voice.formattedTotalDuration;
+            case "wrapup":
+                return (Voice.formattedRecordedDuration !== "0:00" ? Voice.formattedRecordedDuration : root.lastRecordedDuration)
+                    + " | " + (Voice.formattedTranscribedDuration !== "0:00" ? Voice.formattedTranscribedDuration : root.lastTranscribedDuration)
+                    + " | " + (Voice.formattedTotalDuration !== "0:00" ? Voice.formattedTotalDuration : root.lastTotalDuration);
             case "speaking":
-                return Voice.formattedDuration;
+                return Voice.formattedDuration !== "0:00" ? Voice.formattedDuration : root.lastRecordedDuration;
             case "starting":
                 return Voice.formattedDuration;
             default:
@@ -107,6 +112,9 @@ BarGroup {
             function onOverallStateChanged() {
                 if (Voice.overallState === "recording" || Voice.overallState === "starting" || Voice.overallState === "speaking") {
                     wrapUpTimer.stop();
+                    root.lastRecordedDuration = "0:00";
+                    root.lastTranscribedDuration = "0:00";
+                    root.lastTotalDuration = "0:00";
                 } else if (Voice.overallState === "idle") {
                     if (root.previousState === "typing" || root.previousState === "speaking") {
                         wrapUpTimer.restart();
@@ -122,6 +130,24 @@ BarGroup {
             function onFormattedDurationChanged() {
                 if (Voice.formattedDuration !== "0:00") {
                     root.lastRecordedDuration = Voice.formattedDuration;
+                }
+            }
+
+            function onFormattedRecordedDurationChanged() {
+                if (Voice.formattedRecordedDuration !== "0:00") {
+                    root.lastRecordedDuration = Voice.formattedRecordedDuration;
+                }
+            }
+
+            function onFormattedTranscribedDurationChanged() {
+                if (Voice.formattedTranscribedDuration !== "0:00") {
+                    root.lastTranscribedDuration = Voice.formattedTranscribedDuration;
+                }
+            }
+
+            function onFormattedTotalDurationChanged() {
+                if (Voice.formattedTotalDuration !== "0:00") {
+                    root.lastTotalDuration = Voice.formattedTotalDuration;
                 }
             }
         }
